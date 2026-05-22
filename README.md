@@ -14,15 +14,16 @@ O doble clic en `STREAMLIT.bat`.
 
 ## Subir a GitHub
 
-1. Crea un repositorio vacío en GitHub (ej. `logistix-dashboard`).
-2. En esta carpeta:
+Repositorio: **https://github.com/FaridRojas23/logistix-sce**
+
+En esta carpeta:
 
 ```bash
-git init
-git add .
+git init -b main
+git add STREAMFINAL.py requirements.txt README.md render.yaml .gitignore .streamlit/config.toml STREAMLIT.bat
 git commit -m "Dashboard Streamlit LOGISTIX para Render"
-git branch -M main
-git remote add origin https://github.com/TU_USUARIO/logistix-dashboard.git
+git remote remove origin
+git remote add origin https://github.com/FaridRojas23/logistix-sce.git
 git push -u origin main
 ```
 
