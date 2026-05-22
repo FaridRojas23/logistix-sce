@@ -8,8 +8,6 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from streamlit_folium import st_folium
-import folium
 import numpy as np
 from datetime import datetime
 
@@ -783,6 +781,21 @@ st.markdown("""
         background-color: #FFD700 !important;
         color: #111111 !important;
     }
+    .watermark-turromzita {
+        position: fixed;
+        bottom: 14px;
+        right: 18px;
+        z-index: 99999;
+        font-family: "Segoe UI", "Palatino Linotype", Georgia, serif;
+        font-size: 13px;
+        font-style: italic;
+        font-weight: 500;
+        color: rgba(255, 255, 255, 0.28);
+        letter-spacing: 0.4px;
+        pointer-events: none;
+        user-select: none;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -795,7 +808,8 @@ NUM_A_MES = {v: k for k, v in MES_A_NUM.items()}
 ORDEN_MESES = ["ENE", "FEB", "MAR", "ABR", "MAY", "JUN", "JUL", "AGO", "SET", "OCT", "NOV", "DIC"]
 
 PROVINCIAS_PERU = {
-    'LIMA': {'lat': -12.0464, 'lon': -77.0428}, 'BARRANCA': {'lat': -10.7512, 'lon': -77.7665},
+    'LIMA': {'lat': -12.0464, 'lon': -77.0428}, 'CALLAO': {'lat': -12.0561, 'lon': -77.1181},
+    'BARRANCA': {'lat': -10.7512, 'lon': -77.7665},
     'HUAURA': {'lat': -11.1239, 'lon': -77.6122}, 'OYÓN': {'lat': -10.7067, 'lon': -76.7573},
     'HUAROCHIRÍ': {'lat': -11.8482, 'lon': -76.3876}, 'CAÑETE': {'lat': -13.0788, 'lon': -76.3812},
     'YAUYOS': {'lat': -11.8969, 'lon': -75.7711}, 'TRUJILLO': {'lat': -8.1117, 'lon': -79.0288},
@@ -1169,10 +1183,10 @@ def construir_matriz_departamento(
 ):
     df = filtrar_registro_redes(df_reg, red_col, red_tipo=red_tipo, ano=ano, mes_corto=None)
     if df.empty or not prov_col or not gal_col:
-        return pd.DataFrame(), []
+        return pd.DataFrame(), pd.DataFrame(), [], False, None, {}, {}
     df = df.copy()
-    df["PROV_NORM"] = df[prov_col].apply(normalizar_provincia)
-    df = df[df["PROV_NORM"].notna()]
+    df["PROV_KEY"] = df[prov_col].apply(etiqueta_provincia_tabla)
+    df = df[df["PROV_KEY"].notna()]
     df[gal_col] = to_numeric_locale(df[gal_col])
     df["MES_CORTO"] = pd.to_numeric(df.get("MES_NUM", pd.Series()), errors="coerce").map(
         lambda x: NUM_A_MES.get(int(x), "") if pd.notna(x) else ""
@@ -1188,7 +1202,9 @@ def construir_matriz_departamento(
             [m for m in df["MES_CORTO"].unique() if m in ORDEN_MESES],
             key=lambda m: ORDEN_MESES.index(m),
         )
-    pivot_gal = df.groupby(["PROV_NORM", "MES_CORTO"])[gal_col].sum().unstack(fill_value=0)
+    totales_verif = {m: float(df.loc[df["MES_CORTO"] == m, gal_col].sum()) for m in meses_cols}
+
+    pivot_gal = df.groupby(["PROV_KEY", "MES_CORTO"])[gal_col].sum().unstack(fill_value=0)
     for m in meses_cols:
         if m not in pivot_gal.columns:
             pivot_gal[m] = 0.0
@@ -1197,14 +1213,17 @@ def construir_matriz_departamento(
     total_gen_gal = float(pivot_gal["TOTAL"].sum())
     pivot_gal["PART_%"] = (pivot_gal["TOTAL"] / max(total_gen_gal, 1) * 100).round(2)
     pivot_gal = pivot_gal.sort_values("TOTAL", ascending=False)
-    pivot_gal.index = pivot_gal.index.astype(str).str.title()
 
     pivot_sol = pd.DataFrame()
     tiene_soles = False
     col_monto = precio_col if precio_col else resolver_columna_monto(df)
     df["_MONTO"] = calcular_monto_fila(df, gal_col, col_monto)
+    totales_verif_sol = {}
     if float(df["_MONTO"].sum()) > 0:
-        pivot_sol = df.groupby(["PROV_NORM", "MES_CORTO"])["_MONTO"].sum().unstack(fill_value=0)
+        totales_verif_sol = {
+            m: float(df.loc[df["MES_CORTO"] == m, "_MONTO"].sum()) for m in meses_cols
+        }
+        pivot_sol = df.groupby(["PROV_KEY", "MES_CORTO"])["_MONTO"].sum().unstack(fill_value=0)
         for m in meses_cols:
             if m not in pivot_sol.columns:
                 pivot_sol[m] = 0.0
@@ -1213,10 +1232,13 @@ def construir_matriz_departamento(
         total_gen_sol = float(pivot_sol["TOTAL"].sum())
         pivot_sol["PART_%"] = (pivot_sol["TOTAL"] / max(total_gen_sol, 1) * 100).round(2)
         pivot_sol = pivot_sol.reindex(pivot_gal.index).fillna(0)
-        pivot_sol.index = pivot_sol.index.astype(str).str.title()
         tiene_soles = total_gen_sol > 0
 
-    return pivot_gal, pivot_sol, meses_cols, tiene_soles, col_monto
+    totales_verif["_TOTAL"] = float(df[gal_col].sum())
+    if totales_verif_sol:
+        totales_verif_sol["_TOTAL"] = float(df["_MONTO"].sum())
+
+    return pivot_gal, pivot_sol, meses_cols, tiene_soles, col_monto, totales_verif, totales_verif_sol
 
 
 def render_selector_red_departamento():
@@ -1278,11 +1300,14 @@ def render_tabla_abastecimiento_departamento(
     with t3:
         st.caption(f"Acumulado ene.–**{mes_txt}** {ano}. Mes fiscal en panel lateral.")
 
-    matriz_gal, matriz_sol, meses_cols, tiene_soles, col_monto_usado = construir_matriz_departamento(
-        df_reg, prov_col, gal_col, precio_col, red_col, ano=ano, red_tipo=red_tipo, mes_corto=mes_corto
+    matriz_gal, matriz_sol, meses_cols, tiene_soles, col_monto_usado, totales_verif, totales_verif_sol = (
+        construir_matriz_departamento(
+            df_reg, prov_col, gal_col, precio_col, red_col, ano=ano, red_tipo=red_tipo, mes_corto=mes_corto
+        )
     )
     ver_soles = tiene_soles and unidad.startswith("Soles")
     matriz = matriz_sol if ver_soles else matriz_gal
+    totales_pie = totales_verif_sol if ver_soles and totales_verif_sol else totales_verif
     if ver_soles and matriz.empty:
         aviso_amigable(
             f"Sin montos en soles para {red_tipo}. "
@@ -1329,9 +1354,9 @@ def render_tabla_abastecimiento_departamento(
 
     foot = [f'<td class="col-prov">{unidad_lbl}</td>']
     for m in meses_cols:
-        s = float(matriz[m].sum()) if m in matriz.columns else 0.0
+        s = float(totales_pie.get(m, matriz[m].sum() if m in matriz.columns else 0.0))
         foot.append(f'<td style="{color_heatmap_galones(s, vmax)}">{fmt_celda(s)}</td>')
-    t_total = float(matriz["TOTAL"].sum())
+    t_total = float(totales_pie.get("_TOTAL", matriz["TOTAL"].sum()))
     foot.append(f'<td style="background:#111;color:#fff;font-weight:900;">{fmt_celda(t_total)}</td>')
     foot.append('<td style="background:#111;color:#fff;font-weight:900;">100.00%</td>')
 
@@ -1348,14 +1373,10 @@ def render_tabla_abastecimiento_departamento(
             f"Soles = suma de **{col_monto_usado or precio_col}** por provincia y mes (registro)."
             if ver_soles and (col_monto_usado or precio_col)
             else (
-                "Cada celda = suma de **todas las cargas** de esa provincia en ese mes y red "
-                "(todas las estaciones). No es una sola estación."
+                f"Totales del pie = suma directa del registro ({red_tipo}). "
+                "Incluye **todas** las provincias del Excel (Callao, Lima, etc.)."
             )
         )
-    )
-    st.caption(
-        "En Excel, si filtras **TIERRA** ves una estación; si además quedan pocas filas (ej. placa **ATC-846**), "
-        "la suma será menor. Aquí use filtros **Provincia / Estación / Placa** en el panel lateral para igualar su Excel."
     )
 
 
@@ -1744,23 +1765,50 @@ def aviso_amigable(mensaje=None):
 
 
 def normalizar_provincia(nombre):
-    """Mapea textos del Excel (ej. 'LURIN - LIMA') a claves de PROVINCIAS_PERU."""
+    """Mapea textos del Excel (ej. 'LURIN - LIMA') a claves de PROVINCIAS_PERU (solo mapa)."""
     if nombre is None or (isinstance(nombre, float) and pd.isna(nombre)):
         return None
-    texto = str(nombre).upper().strip()
+    texto = _texto_sin_acentos(str(nombre).strip())
     if not texto or texto in ("NAN", "NONE", ""):
         return None
     if texto in PROVINCIAS_PERU:
         return texto
-    if " - " in texto:
-        partes = [p.strip() for p in texto.split(" - ") if p.strip()]
+    if " - " in str(nombre).upper():
+        partes = [p.strip() for p in str(nombre).upper().split(" - ") if p.strip()]
         for parte in reversed(partes):
-            if parte in PROVINCIAS_PERU:
-                return parte
+            pnorm = _texto_sin_acentos(parte)
+            if pnorm in PROVINCIAS_PERU:
+                return pnorm
     for prov in PROVINCIAS_PERU:
         if prov in texto:
             return prov
     return None
+
+
+def etiqueta_provincia_tabla(nombre):
+    """Etiqueta para tablas: conserva TODAS las provincias del Excel (no descarta filas)."""
+    if nombre is None or (isinstance(nombre, float) and pd.isna(nombre)):
+        return None
+    texto = str(nombre).strip()
+    if not texto or texto.upper() in ("NAN", "N/A", "NONE", ""):
+        return None
+    catalogada = normalizar_provincia(nombre)
+    if catalogada:
+        return catalogada.title()
+    return _texto_sin_acentos(texto).title()
+
+
+def buscar_columna_proveedor(df):
+    """Columna PRIMAX/REDCOL — nunca CONTROL COSTO (códigos CECO)."""
+    if df is None or df.empty:
+        return None
+    if "PROVEEDOR" in df.columns:
+        return "PROVEEDOR"
+    for col in df.columns:
+        compact = nombre_columna_compacto(col)
+        if compact == "PROVEEDOR" or compact.endswith("PROVEEDOR"):
+            return col
+    return buscar_columna(df, "PROVEEDOR")
 
 
 def contar_proveedor(serie, clave):
@@ -1819,7 +1867,7 @@ def resolver_columnas_registro(df):
     return {
         "provincia": buscar_columna(df, "PROVINCIA"),
         "estacion": buscar_columna_estacion(df),
-        "proveedor": buscar_columna(df, "PROVEEDOR"),
+        "proveedor": buscar_columna_proveedor(df),
         "estado": buscar_columna(df, "ESTADO"),
         "galones": buscar_columna_galones(df),
         "monto": resolver_columna_monto(df),
@@ -1935,19 +1983,20 @@ def resolver_columna_monto(df):
 
 
 def calcular_monto_fila(df, gal_col, precio_col=None):
-    """Monto en soles por registro: usa SUBTOTAL/TOTAL; si solo hay precio unitario, × galones."""
+    """Monto en soles por registro: SUBTOTAL/TOTAL; si solo PRECIO unitario, × galones."""
     if df is None or df.empty:
         return pd.Series(dtype=float)
     col = precio_col if precio_col else resolver_columna_monto(df)
     if not col or col not in df.columns:
         return pd.Series(0.0, index=df.index)
     monto = to_numeric_monto(df[col])
+    nombre = nombre_columna_compacto(col)
+    if "SUBTOTAL" in nombre or (nombre.endswith("TOTAL") and "SUBTOTAL" not in nombre):
+        return monto
     if gal_col and gal_col in df.columns:
         gal = to_numeric_locale(df[gal_col])
-        # Precio por galón (valores bajos) → multiplicar por galones para obtener gasto
         if float(gal.sum()) > 0 and float(monto.max()) < 80 and float(monto.median()) < 25:
-            nombre = str(col).upper()
-            if "PRECIO" in nombre and "SUBTOTAL" not in nombre and "TOTAL" not in nombre:
+            if "PRECIO" in nombre:
                 monto = monto * gal
     return monto
 
@@ -2016,7 +2065,7 @@ def _preparar_registro(df):
     return df
 
 
-@st.cache_data(ttl=300, show_spinner="Sincronizando Excel desde SharePoint…")
+@st.cache_data(ttl=600, show_spinner="Sincronizando Excel desde SharePoint…")
 def cargar_datos_sharepoint():
     df_bdmes = pd.DataFrame()
     df_registro = pd.DataFrame()
@@ -2831,17 +2880,6 @@ if _bdmes_ok:
                 )
             else:
                 df_datos = df_reg_vista.copy()
-                df_map = df_datos.copy()
-                df_map[prov_col] = df_map[prov_col].astype(str).str.upper().str.strip()
-                df_map["PROV_NORM"] = df_map[prov_col].apply(normalizar_provincia)
-                df_map["LATITUD"] = df_map["PROV_NORM"].map(
-                    lambda x: PROVINCIAS_PERU.get(x, {}).get("lat") if x else None
-                )
-                df_map["LONGITUD"] = df_map["PROV_NORM"].map(
-                    lambda x: PROVINCIAS_PERU.get(x, {}).get("lon") if x else None
-                )
-                df_map_valid = df_map.dropna(subset=["LATITUD", "LONGITUD"]).copy()
-                sin_coord = len(df_map) - len(df_map_valid)
 
                 if red_col and red_col in df_datos.columns:
                     mask_pr = df_datos[red_col].astype(str).str.upper()
@@ -2849,13 +2887,10 @@ if _bdmes_ok:
                     n_redcol = int(mask_pr.str.contains("REDCOL", na=False).sum())
                 else:
                     n_primax = n_redcol = 0
-                msg_val = (
+                st.caption(
                     f"**{mes_sel}** — {len(df_datos)} abastecimientos en registro "
-                    f"(PRIMAX: {n_primax} | REDCOL: {n_redcol})"
+                    f"(PRIMAX: {n_primax} | REDCOL: {n_redcol})."
                 )
-                if sin_coord > 0:
-                    msg_val += f"; {sin_coord} sin provincia en catálogo (no aparecen en el mapa)"
-                st.caption(msg_val + ".")
 
                 st.markdown('<div class="section-title">Estadísticas de Estaciones</div>', unsafe_allow_html=True)
                 est1, est2, est3, est4, est5 = st.columns(5)
@@ -2889,89 +2924,6 @@ if _bdmes_ok:
                 )
 
                 st.markdown('<div class="divider-line"></div>', unsafe_allow_html=True)
-
-                if not df_map_valid.empty:
-                    col_mapa, col_tabla = st.columns([2, 1])
-                    
-                    with col_mapa:
-                        st.markdown('<div class="section-title">Ubicación Geográfica</div>', unsafe_allow_html=True)
-                        
-                        center_lat = df_map_valid['LATITUD'].mean()
-                        center_lon = df_map_valid['LONGITUD'].mean()
-                        
-                        m = folium.Map(
-                            location=[center_lat, center_lon],
-                            zoom_start=6,
-                            tiles="OpenStreetMap"
-                        )
-                        colores_red = {
-                            "PRIMAX": {"fill": "#2563eb", "border": "#1d4ed8"},
-                            "REDCOL": {"fill": "#ef4444", "border": "#b91c1c"},
-                        }
-                        for idx, row in df_map_valid.iterrows():
-                            red_val = row.get(red_col, "") if red_col else ""
-                            tipo_red = tipo_proveedor_combustible(red_val)
-                            if tipo_red not in colores_red:
-                                continue
-                            estilo = colores_red[tipo_red]
-                            red_info = f"<br>Red: <b>{row.get(red_col, 'N/A')}</b>" if red_col else ""
-                            gal_info = f"<br>Galones: {format_number(row.get(galones_col, 0), 2):.2f}" if galones_col else ""
-                            popup_text = (
-                                f"<b>{row.get(estacion_col, 'Estación')}</b><br>"
-                                f"Proveedor: <b>{tipo_red}</b><br>"
-                                f"Provincia: {row.get(prov_col, 'N/A')}{red_info}{gal_info}<br>"
-                                f"Estado: {row.get(estado_col, 'N/A') if estado_col else 'N/A'}"
-                            )
-                            folium.CircleMarker(
-                                location=[row["LATITUD"], row["LONGITUD"]],
-                                radius=9,
-                                popup=folium.Popup(popup_text, max_width=300),
-                                tooltip=f"{row.get(estacion_col, 'Estación')} — {tipo_red}",
-                                color=estilo["border"],
-                                weight=2,
-                                fill=True,
-                                fill_color=estilo["fill"],
-                                fill_opacity=0.92,
-                            ).add_to(m)
-                        st.markdown(
-                            """
-                            <div class="map-legend-redes">
-                                <div class="map-legend-item"><span class="map-dot-primax"></span> PRIMAX</div>
-                                <div class="map-legend-item"><span class="map-dot-redcol"></span> REDCOL</div>
-                            </div>
-                            """,
-                            unsafe_allow_html=True,
-                        )
-                        st_folium(m, width=900, height=550)
-                    
-                    with col_tabla:
-                        st.markdown('<div class="section-title">Resumen por Provincia</div>', unsafe_allow_html=True)
-                        
-                        df_resumen = df_map_valid.groupby(prov_col).size().reset_index(name='Total')
-                        
-                        if red_col and red_col in df_map_valid.columns:
-                            primax_list = []
-                            redcol_list = []
-                            
-                            for prov in df_resumen[prov_col]:
-                                prov_data = df_map_valid[df_map_valid[prov_col] == prov][red_col]
-                                primax_count = contar_proveedor(prov_data, "PRIMAX")
-                                redcol_count = contar_proveedor(prov_data, "REDCOL")
-                                primax_list.append(primax_count)
-                                redcol_list.append(redcol_count)
-                            
-                            df_resumen['PRIMAX'] = primax_list
-                            df_resumen['REDCOL'] = redcol_list
-                        
-                        df_resumen = df_resumen.sort_values('Total', ascending=False)
-                        st.dataframe(df_resumen, use_container_width=True, hide_index=True, height=550)
-                else:
-                    st.warning(
-                        "Mapa no disponible: provincias sin coordenadas en el catálogo. "
-                        "KPIs y tablas siguen mostrando todos los registros del mes."
-                    )
-                    
-                    st.markdown('<div class="divider-line"></div>', unsafe_allow_html=True)
                 if estacion_col and red_col and galones_col:
                     render_tabla_estaciones_red(
                         df_datos,
@@ -3102,3 +3054,8 @@ else:
     if st.button("Reintentar conexión (limpiar caché)"):
         st.cache_data.clear()
         st.rerun()
+
+st.markdown(
+    '<div class="watermark-turromzita">Turromzita &lt;333333</div>',
+    unsafe_allow_html=True,
+)
