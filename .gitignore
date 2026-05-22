@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.streamlit/secrets.toml
+.env
+.venv/
+venv/
+*.xlsx
+*.xls
+.DS_Store
+desktop.ini
+_patch_trimestre.py
