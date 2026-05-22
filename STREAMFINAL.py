@@ -783,17 +783,99 @@ st.markdown("""
         background-color: #FFD700 !important;
         color: #111111 !important;
     }
-    .vehiculo-holo-wrap {
-        background: radial-gradient(ellipse at center, rgba(255,215,0,0.12) 0%, #0a0a0a 70%);
-        border: 1px solid rgba(255, 215, 0, 0.35);
-        border-radius: 16px;
-        padding: 12px;
-        min-height: 380px;
-    }
-    .vehiculo-holo-wrap model-viewer {
+    .vehiculo-holo-stage {
+        position: relative;
         width: 100%;
-        height: 360px;
+        min-height: 520px;
+        border-radius: 18px;
+        overflow: hidden;
+        background:
+            radial-gradient(ellipse 80% 60% at 50% 45%, rgba(255,215,0,0.18) 0%, transparent 55%),
+            radial-gradient(ellipse 100% 80% at 50% 100%, rgba(37,99,235,0.12) 0%, transparent 50%),
+            linear-gradient(180deg, #0d0d0d 0%, #050505 100%);
+        border: 1px solid rgba(255, 215, 0, 0.4);
+        box-shadow: 0 0 40px rgba(255, 215, 0, 0.08), inset 0 0 60px rgba(255, 215, 0, 0.04);
+    }
+    .vehiculo-holo-stage model-viewer {
+        width: 100%;
+        height: 520px;
         --poster-color: transparent;
+    }
+    .holo-ring {
+        position: absolute;
+        left: 50%;
+        top: 52%;
+        width: 280px;
+        height: 280px;
+        margin: -140px 0 0 -140px;
+        border-radius: 50%;
+        border: 1px solid rgba(255, 215, 0, 0.25);
+        pointer-events: none;
+        animation: holo-spin 12s linear infinite;
+    }
+    .holo-ring-2 {
+        width: 340px;
+        height: 340px;
+        margin: -170px 0 0 -170px;
+        border-color: rgba(37, 99, 235, 0.2);
+        animation-duration: 18s;
+        animation-direction: reverse;
+    }
+    @keyframes holo-spin {
+        from { transform: rotateX(62deg) rotateZ(0deg); }
+        to { transform: rotateX(62deg) rotateZ(360deg); }
+    }
+    .sce-logo-3d {
+        position: absolute;
+        left: 50%;
+        top: 58%;
+        transform: translate(-50%, -50%) rotateY(-18deg);
+        z-index: 5;
+        font-size: 42px;
+        font-weight: 900;
+        letter-spacing: 6px;
+        color: #ffd700;
+        text-shadow: 0 0 20px rgba(255,215,0,0.9), 0 2px 8px rgba(0,0,0,0.9);
+        pointer-events: none;
+        font-family: "Segoe UI", Arial, sans-serif;
+    }
+    .holo-veh-titulo {
+        position: absolute;
+        top: 14px;
+        left: 0;
+        right: 0;
+        text-align: center;
+        z-index: 6;
+        color: #fff;
+        font-size: 15px;
+        font-weight: 700;
+        text-shadow: 0 1px 4px #000;
+    }
+    .holo-veh-sub {
+        position: absolute;
+        top: 36px;
+        left: 0;
+        right: 0;
+        text-align: center;
+        z-index: 6;
+        color: #ffd700;
+        font-size: 12px;
+        font-weight: 600;
+    }
+    .holo-veh-hint {
+        position: absolute;
+        bottom: 10px;
+        left: 0;
+        right: 0;
+        text-align: center;
+        color: #888;
+        font-size: 11px;
+        z-index: 6;
+    }
+    .vehiculo-specs-panel {
+        max-height: 520px;
+        overflow-y: auto;
+        padding-right: 4px;
     }
     .vehiculo-spec-card {
         background: linear-gradient(145deg, #141414 0%, #0a0a0a 100%);
@@ -2143,19 +2225,60 @@ URL_MODELO_CAMION_3D = (
     "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/"
     "2.0/CesiumMilkTruck/glTF-Binary/CesiumMilkTruck.glb"
 )
-URL_MODELO_AUTO_3D = (
-    "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/"
-    "2.0/Avocado/glTF-Binary/Avocado.glb"
+URL_MODELO_TRACTO_3D = URL_MODELO_CAMION_3D
+URL_MODELO_UTIL_3D = (
+    "https://raw.githubusercontent.com/mrdoob/three.js/r128/examples/models/gltf/ferrari.glb"
 )
+HDR_ENV_3D = "https://modelviewer.dev/shared-assets/environments/spruit_sunrise_1k_HDR.hdr"
 
 
-def _url_modelo_3d_por_tipo(tipo_flota):
+def _config_modelo_3d(tipo_flota, marca, modelo):
+    """URL + cámara según tipo de flota y marca (referencia visual más cercana)."""
     t = _texto_sin_acentos(str(tipo_flota or ""))
-    if any(k in t for k in ("TRACT", "CAMION", "CAMI", "VOLQU", "REMOL", "CISTER")):
-        return URL_MODELO_CAMION_3D
-    if any(k in t for k in ("AUTO", "PICK", "SUV", "VAN")):
-        return URL_MODELO_AUTO_3D
-    return URL_MODELO_CAMION_3D
+    m = _texto_sin_acentos(str(marca or ""))
+    mod = str(modelo or "").strip()
+    etiqueta = f"{marca} {mod}".strip() if marca not in ("—", "") else mod or "Flota SCE"
+    url = URL_MODELO_CAMION_3D
+    orbit = "42deg 88% 102%"
+    scale = "1.05 1.05 1.05"
+    categoria = "Camión de carga"
+
+    marcas_tracto = (
+        "IVECO", "VOLVO", "SCANIA", "FREIGHT", "INTERNATIONAL", "KENWORTH",
+        "MACK", "PETERBILT", "MERCEDES", "MAN", "DAF", "RENAULT",
+    )
+    marcas_camion = (
+        "DONGFENG", "FAW", "SHACMAN", "JAC", "CHEVROLET", "HINO", "ISUZU",
+        "HYUNDAI", "FOTON", "FORLAND", "BEIBEN", "HOWO", "SINOTRUK",
+    )
+
+    if any(k in t for k in ("TRACT", "REMOL", "CISTER", "SEMIR")):
+        url = URL_MODELO_TRACTO_3D
+        orbit = "28deg 72% 125%"
+        scale = "1.22 1.22 1.22"
+        categoria = "Tracto"
+    elif any(k in t for k in ("PICK", "FURG", "VAN", "UTILIT", "AUTO")):
+        url = URL_MODELO_UTIL_3D
+        orbit = "38deg 92% 96%"
+        scale = "0.85 0.85 0.85"
+        categoria = "Utilitario"
+    elif "VOLQU" in t or "TIPPER" in t:
+        orbit = "36deg 82% 112%"
+        scale = "1.2 1.2 1.2"
+        categoria = "Volquete"
+
+    if any(mk in m for mk in marcas_tracto):
+        url = URL_MODELO_TRACTO_3D
+        orbit = "26deg 70% 128%"
+        scale = "1.25 1.25 1.25"
+        categoria = f"Tracto · {marca}"
+    elif any(mk in m for mk in marcas_camion) or "DONGFENG" in m:
+        url = URL_MODELO_CAMION_3D
+        orbit = "38deg 84% 112%"
+        scale = "1.14 1.14 1.14"
+        categoria = f"Camión · {marca}" if marca not in ("—", "") else "Camión de carga"
+
+    return url, orbit, scale, html.escape(etiqueta), html.escape(categoria)
 
 
 def _preparar_vehiculos(df):
@@ -2195,30 +2318,38 @@ def buscar_ficha_vehiculo(placa, df_veh, df_bdmes):
 
 
 def render_holograma_vehiculo(tipo_flota, marca, modelo):
-    """Visor 3D rotativo (model-viewer); requiere internet la primera vez."""
-    url = _url_modelo_3d_por_tipo(tipo_flota)
-    titulo = html.escape(f"{marca} {modelo}".strip() or "Vehículo de flota")
+    """Visor 3D estilo holograma (model-viewer + iluminación HDR)."""
+    url, orbit, scale, titulo, categoria = _config_modelo_3d(tipo_flota, marca, modelo)
     components.html(
         f"""
         <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
-        <div class="vehiculo-holo-wrap" style="
-            background: radial-gradient(ellipse at center, rgba(255,215,0,0.14) 0%, #0a0a0a 72%);
-            border: 1px solid rgba(255,215,0,0.35); border-radius: 16px; padding: 12px;">
-            <div style="text-align:center;color:#ffd700;font-weight:700;margin-bottom:8px;">{titulo}</div>
-            <model-viewer src="{html.escape(url)}"
-                alt="Modelo 3D"
-                auto-rotate rotation-per-second="18deg"
-                camera-controls touch-action="pan-y"
-                shadow-intensity="1"
-                exposure="1.1"
-                style="width:100%;height:360px;background:transparent;">
+        <div class="vehiculo-holo-stage">
+            <div class="holo-veh-titulo">{titulo}</div>
+            <div class="holo-veh-sub">{categoria} · Socorro Cargo Express</div>
+            <div class="holo-ring"></div>
+            <div class="holo-ring holo-ring-2"></div>
+            <model-viewer src="{url}"
+                alt="{titulo}"
+                scale="{scale}"
+                camera-orbit="{orbit}"
+                min-camera-orbit="auto auto 60%"
+                max-camera-orbit="auto auto 140%"
+                environment-image="{html.escape(HDR_ENV_3D)}"
+                exposure="1.25"
+                shadow-intensity="1.35"
+                shadow-softness="0.8"
+                auto-rotate
+                rotation-per-second="22deg"
+                camera-controls
+                touch-action="pan-y"
+                interaction-prompt="none"
+                style="background:transparent;">
             </model-viewer>
-            <div style="text-align:center;color:#888;font-size:11px;margin-top:6px;">
-                Arrastre para girar · rueda del mouse para zoom
-            </div>
+            <div class="sce-logo-3d">SCE</div>
+            <div class="holo-veh-hint">Arrastre para girar · scroll para zoom · referencia 3D según tipo y marca</div>
         </div>
         """,
-        height=430,
+        height=540,
         scrolling=False,
     )
 
@@ -2248,7 +2379,9 @@ def render_vista_ficha_vehiculo(df_bdmes, df_vehiculos, mes_corto, simbolo):
     if not placas:
         aviso_amigable("No hay placas en BdMes ni en TMDatosvehículo.")
         return
-    placa_sel = st.selectbox("Seleccione placa", placas, key="ficha_placa_sel")
+    c_placa, _ = st.columns([2, 1])
+    with c_placa:
+        placa_sel = st.selectbox("Seleccione placa", placas, key="ficha_placa_sel")
     ficha = buscar_ficha_vehiculo(placa_sel, df_vehiculos, df_bdmes)
     tipo = _valor_ficha(
         ficha.get("TIPO")
@@ -2257,60 +2390,63 @@ def render_vista_ficha_vehiculo(df_bdmes, df_vehiculos, mes_corto, simbolo):
     )
     marca = _valor_ficha(ficha.get("MARCA"))
     modelo = _valor_ficha(ficha.get("MODELO"))
-    col_3d, col_specs = st.columns([1.1, 1])
+
+    col_3d, col_specs = st.columns([1.75, 1])
     with col_3d:
-        st.markdown('<div class="section-title">Vista 3D</div>', unsafe_allow_html=True)
         render_holograma_vehiculo(tipo, marca, modelo)
-        st.caption(
-            "Modelo 3D genérico según tipo de flota (camión/tracto). "
-            "Los datos técnicos salen de su Excel **TMDatosvehículo**."
-        )
+        if df_bdmes is not None and not df_bdmes.empty and mes_corto:
+            cols = columnas_mes(mes_corto, df_bdmes.columns)
+            fila_m = df_bdmes[df_bdmes["PLACA"] == placa_sel]
+            if not fila_m.empty and cols["gal"] in df_bdmes.columns:
+                r = fila_m.iloc[0]
+                st.markdown(
+                    f'<div class="section-title" style="margin-top:12px;">Consumo — '
+                    f'{MESES_COMPLETOS.get(mes_corto, mes_corto)}</div>',
+                    unsafe_allow_html=True,
+                )
+                k1, k2, k3, k4 = st.columns(4)
+                render_kpi_beautiful(
+                    k1, "Galones", f"{format_number(r.get(cols['gal'], 0), 2):,.2f}", "GL"
+                )
+                render_kpi_beautiful(
+                    k2, "Kilómetros", f"{format_number(r.get(cols['km'], 0), 2):,.2f}", "KM"
+                )
+                render_kpi_beautiful(
+                    k3, "Rendimiento", f"{format_number(r.get(cols['ren'], 0), 2):,.2f}", "KM/G"
+                )
+                render_kpi_beautiful(
+                    k4, "Gasto", f"{simbolo} {format_number(r.get(cols['sub'], 0), 2):,.2f}"
+                )
+
     with col_specs:
-        st.markdown('<div class="section-title">Características</div>', unsafe_allow_html=True)
-        render_tarjeta_spec("Placa", placa_sel)
-        render_tarjeta_spec("Tipo de flota", tipo)
-        render_tarjeta_spec("Marca", marca)
-        render_tarjeta_spec("Modelo", modelo)
-        render_tarjeta_spec("Año", _valor_ficha(ficha.get("AÑO") or ficha.get("ANO")))
-        render_tarjeta_spec("Conductor", _valor_ficha(ficha.get("CONDUCTOR")))
-        render_tarjeta_spec("CECO / Área", _valor_ficha(ficha.get("CECO")))
-        render_tarjeta_spec("Tanque combustible", _valor_ficha(ficha.get("TANQUE DE COMBUSTIBLE")))
-        render_tarjeta_spec("Combustible", _valor_ficha(ficha.get("COMBUSTIBLE")))
-        render_tarjeta_spec("Ejes", _valor_ficha(ficha.get("EJES")))
-        render_tarjeta_spec("Dimensiones (L × A × Al)", (
-            f"{_valor_ficha(ficha.get('LARGO'))} × "
-            f"{_valor_ficha(ficha.get('ANCHO'))} × "
-            f"{_valor_ficha(ficha.get('ALTO'))} m"
-        ))
+        st.markdown('<div class="section-title">Ficha técnica</div>', unsafe_allow_html=True)
+        st.markdown('<div class="vehiculo-specs-panel">', unsafe_allow_html=True)
+        s1, s2 = st.columns(2)
+        with s1:
+            render_tarjeta_spec("Placa", placa_sel)
+            render_tarjeta_spec("Tipo flota", tipo)
+            render_tarjeta_spec("Marca", marca)
+            render_tarjeta_spec("Modelo", modelo)
+            render_tarjeta_spec("Año", _valor_ficha(ficha.get("AÑO") or ficha.get("ANO")))
+        with s2:
+            render_tarjeta_spec("Conductor", _valor_ficha(ficha.get("CONDUCTOR")))
+            render_tarjeta_spec("CECO", _valor_ficha(ficha.get("CECO")))
+            render_tarjeta_spec("Tanque (GL)", _valor_ficha(ficha.get("TANQUE DE COMBUSTIBLE")))
+            render_tarjeta_spec("Combustible", _valor_ficha(ficha.get("COMBUSTIBLE")))
+            render_tarjeta_spec("Ejes", _valor_ficha(ficha.get("EJES")))
+        render_tarjeta_spec(
+            "Dimensiones L × A × Al (m)",
+            f"{_valor_ficha(ficha.get('LARGO'))} × {_valor_ficha(ficha.get('ANCHO'))} × {_valor_ficha(ficha.get('ALTO'))}",
+        )
         render_tarjeta_spec("Peso bruto", _valor_ficha(ficha.get("PESO BRUTO")))
-        render_tarjeta_spec("Capacidad (TN)", _valor_ficha(ficha.get("CAPACIDAD TN")))
+        render_tarjeta_spec("Capacidad TN", _valor_ficha(ficha.get("CAPACIDAD TN")))
         rpm_val = "—"
         for clave, val in ficha.items():
             if "RPM" in str(clave).upper() or "REVOLUCION" in str(clave).upper():
                 rpm_val = _valor_ficha(val)
                 break
         render_tarjeta_spec("RPM", rpm_val)
-    if df_bdmes is not None and not df_bdmes.empty and mes_corto:
-        cols = columnas_mes(mes_corto, df_bdmes.columns)
-        fila_m = df_bdmes[df_bdmes["PLACA"] == placa_sel]
-        if not fila_m.empty and cols["gal"] in df_bdmes.columns:
-            st.markdown('<div class="divider-line"></div>', unsafe_allow_html=True)
-            st.markdown(
-                f'<div class="section-title">Consumo — {MESES_COMPLETOS.get(mes_corto, mes_corto)}</div>',
-                unsafe_allow_html=True,
-            )
-            r = fila_m.iloc[0]
-            c1, c2, c3, c4 = st.columns(4)
-            render_kpi_beautiful(
-                c1, "Galones", f"{format_number(r.get(cols['gal'], 0), 2):,.2f}", "GL"
-            )
-            render_kpi_beautiful(c2, "Kilómetros", f"{format_number(r.get(cols['km'], 0), 2):,.2f}", "KM")
-            render_kpi_beautiful(
-                c3, "Rendimiento", f"{format_number(r.get(cols['ren'], 0), 2):,.2f}", "KM/G"
-            )
-            render_kpi_beautiful(
-                c4, "Gasto", f"{simbolo} {format_number(r.get(cols['sub'], 0), 2):,.2f}"
-            )
+        st.markdown("</div>", unsafe_allow_html=True)
 
 
 def _preparar_bdmes(df):
@@ -3245,68 +3381,6 @@ if _bdmes_ok or _registro_ok or _vehiculos_ok:
                         precio_col_reg,
                         simbolo,
                     )
-
-                st.markdown('<div class="divider-line"></div>', unsafe_allow_html=True)
-                if prov_col and red_col and galones_col:
-                    render_tabla_provincia_red(
-                        df_datos, prov_col, galones_col, precio_col_reg, red_col, simbolo
-                    )
-                    st.markdown('<div class="divider-line"></div>', unsafe_allow_html=True)
-                    st.markdown(
-                        '<div class="section-title">Galones por provincia — PRIMAX vs REDCOL</div>',
-                        unsafe_allow_html=True,
-                    )
-                    df_combustible = df_datos.copy()
-                    df_combustible[galones_col] = to_numeric_locale(df_combustible[galones_col])
-                    if red_col and red_col in df_combustible.columns:
-                        filas_chart = []
-                        for prov in df_combustible[prov_col].unique():
-                            prov_data = df_combustible[df_combustible[prov_col] == prov]
-                            mask_p = prov_data[red_col].astype(str).str.upper().str.contains("PRIMAX", na=False)
-                            mask_r = prov_data[red_col].astype(str).str.upper().str.contains("REDCOL", na=False)
-                            filas_chart.append(
-                                {
-                                    "Provincia": prov,
-                                    "Red": "PRIMAX",
-                                    "Galones": float(prov_data.loc[mask_p, galones_col].sum()),
-                                }
-                            )
-                            filas_chart.append(
-                                {
-                                    "Provincia": prov,
-                                    "Red": "REDCOL",
-                                    "Galones": float(prov_data.loc[mask_r, galones_col].sum()),
-                                }
-                            )
-                        df_stack = pd.DataFrame(filas_chart)
-                        df_stack = df_stack[df_stack["Galones"] > 0]
-                        if not df_stack.empty:
-                            fig_part = px.bar(
-                                df_stack,
-                                x="Galones",
-                                y="Provincia",
-                                color="Red",
-                                orientation="h",
-                                barmode="group",
-                                template="plotly_dark",
-                                color_discrete_map={"PRIMAX": "#2563eb", "REDCOL": "#ef4444"},
-                                category_orders={"Red": ["PRIMAX", "REDCOL"]},
-                            )
-                            fig_part.update_layout(
-                                height=max(400, df_stack["Provincia"].nunique() * 32),
-                                paper_bgcolor="#000000",
-                                plot_bgcolor="#000000",
-                                xaxis_title="Galones",
-                                yaxis_title="Provincia",
-                                legend_title="Red de estaciones",
-                                legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
-                                margin=dict(l=150, r=20, t=40, b=40),
-                            )
-                            st.plotly_chart(fig_part, use_container_width=True, config={"displayModeBar": False})
-                        else:
-                            aviso_amigable("Sin galones PRIMAX/REDCOL para graficar.")
-                    else:
-                        aviso_amigable("Columna de proveedor no disponible en registro.")
 
     elif menu == VISTA_FICHA_VEHICULO:
         if not _bdmes_ok and not _vehiculos_ok:
