@@ -4,7 +4,8 @@ services:
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: streamlit run STREAMFINAL.py --server.port=$PORT --server.address=0.0.0.0 --server.headless=true
+    startCommand: chmod +x start_render.sh && ./start_render.sh
+    healthCheckPath: /_stcore/health
     envVars:
       - key: PYTHON_VERSION
         value: "3.11.9"
