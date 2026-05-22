@@ -5,6 +5,7 @@ import re
 import unicodedata
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -116,7 +117,8 @@ MSG_NO_DATA = "Dato no disponible por el momento"
 VISTA_TRIMESTRE = "Trimestre"
 VISTA_POR_FLOTA = "Por Flota"
 VISTA_REDES = "Red de Estaciones"
-VISTAS_MENU = [VISTA_TRIMESTRE, VISTA_POR_FLOTA, VISTA_REDES]
+VISTA_FICHA_VEHICULO = "Ficha vehículo"
+VISTAS_MENU = [VISTA_TRIMESTRE, VISTA_POR_FLOTA, VISTA_REDES, VISTA_FICHA_VEHICULO]
 _ALIASES_VISTA = {
     "Dashboard Combustible": VISTA_POR_FLOTA,
     "Por flota": VISTA_POR_FLOTA,
@@ -781,6 +783,38 @@ st.markdown("""
         background-color: #FFD700 !important;
         color: #111111 !important;
     }
+    .vehiculo-holo-wrap {
+        background: radial-gradient(ellipse at center, rgba(255,215,0,0.12) 0%, #0a0a0a 70%);
+        border: 1px solid rgba(255, 215, 0, 0.35);
+        border-radius: 16px;
+        padding: 12px;
+        min-height: 380px;
+    }
+    .vehiculo-holo-wrap model-viewer {
+        width: 100%;
+        height: 360px;
+        --poster-color: transparent;
+    }
+    .vehiculo-spec-card {
+        background: linear-gradient(145deg, #141414 0%, #0a0a0a 100%);
+        border: 1px solid #2a2a2a;
+        border-left: 3px solid #ffd700;
+        border-radius: 10px;
+        padding: 14px 16px;
+        margin-bottom: 10px;
+    }
+    .vehiculo-spec-card .spec-label {
+        color: #888;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    .vehiculo-spec-card .spec-value {
+        color: #fff;
+        font-size: 15px;
+        font-weight: 700;
+        margin-top: 2px;
+    }
     .watermark-turromzita {
         position: fixed;
         bottom: 14px;
@@ -1234,9 +1268,9 @@ def construir_matriz_departamento(
         pivot_sol = pivot_sol.reindex(pivot_gal.index).fillna(0)
         tiene_soles = total_gen_sol > 0
 
-    totales_verif["_TOTAL"] = float(df[gal_col].sum())
+    totales_verif["_TOTAL"] = sum(totales_verif.get(m, 0.0) for m in meses_cols)
     if totales_verif_sol:
-        totales_verif_sol["_TOTAL"] = float(df["_MONTO"].sum())
+        totales_verif_sol["_TOTAL"] = sum(totales_verif_sol.get(m, 0.0) for m in meses_cols)
 
     return pivot_gal, pivot_sol, meses_cols, tiene_soles, col_monto, totales_verif, totales_verif_sol
 
@@ -1356,7 +1390,13 @@ def render_tabla_abastecimiento_departamento(
     for m in meses_cols:
         s = float(totales_pie.get(m, matriz[m].sum() if m in matriz.columns else 0.0))
         foot.append(f'<td style="{color_heatmap_galones(s, vmax)}">{fmt_celda(s)}</td>')
-    t_total = float(totales_pie.get("_TOTAL", matriz["TOTAL"].sum()))
+    t_total = float(
+        totales_pie.get("_TOTAL")
+        if "_TOTAL" in totales_pie
+        else sum(float(totales_pie.get(m, 0.0)) for m in meses_cols)
+    )
+    if t_total <= 0:
+        t_total = float(matriz["TOTAL"].sum())
     foot.append(f'<td style="background:#111;color:#fff;font-weight:900;">{fmt_celda(t_total)}</td>')
     foot.append('<td style="background:#111;color:#fff;font-weight:900;">100.00%</td>')
 
@@ -1508,43 +1548,31 @@ def construir_tabla_estaciones(df_reg, estacion_col, red_col, gal_col, precio_co
     return pd.DataFrame(filas).sort_values("TOTAL_GL", ascending=False)
 
 
-def render_tabla_estaciones_red(df_reg, estacion_col, red_col, gal_col, precio_col, simbolo, red_tipo=None):
-    """Tabla por estación: galones o soles PRIMAX/REDCOL + precio promedio por galón."""
-    red_filtro = red_tipo or st.session_state.get("dep_red_tipo")
-    titulo_red = f" — {red_filtro}" if red_filtro in ("PRIMAX", "REDCOL") else " — PRIMAX vs REDCOL"
-    st.markdown(
-        f'<div class="section-title">Resumen por Estación{titulo_red}</div>',
-        unsafe_allow_html=True,
-    )
-    df_tab = construir_tabla_estaciones(
-        df_reg, estacion_col, red_col, gal_col, precio_col, red_tipo=red_filtro
-    )
-    if df_tab.empty:
-        aviso_amigable("Sin abastecimientos PRIMAX/REDCOL por estación en el mes.")
-        return
-    tiene_soles = bool(precio_col) and df_tab["TOTAL_S"].sum() > 0
+def _radio_unidad_gal_soles(simbolo, tiene_soles, key):
     opciones = ["Galones (GL)"]
     if tiene_soles:
         opciones.append(f"Soles ({simbolo})")
-    modo = st.radio("Ver en", opciones, horizontal=True, key="red_est_unidad")
-    if red_filtro == "REDCOL":
-        cols_gal = ["ESTACIÓN", "CARGAS", "REDCOL_GL"]
-        cols_sol = ["ESTACIÓN", "CARGAS", "REDCOL_S"]
-    elif red_filtro == "PRIMAX":
-        cols_gal = ["ESTACIÓN", "CARGAS", "PRIMAX_GL"]
-        cols_sol = ["ESTACIÓN", "CARGAS", "PRIMAX_S"]
-    else:
-        cols_gal = ["ESTACIÓN", "CARGAS", "PRIMAX_GL", "REDCOL_GL", "TOTAL_GL"]
-        cols_sol = ["ESTACIÓN", "CARGAS", "PRIMAX_S", "REDCOL_S", "TOTAL_S"]
+    return st.radio("Ver en", opciones, horizontal=True, key=key, label_visibility="collapsed")
+
+
+def _formatear_tabla_red_dual(df_tab, modo, simbolo, id_col):
+    """Muestra PRIMAX y REDCOL en galones o soles."""
+    cols_gal = [id_col, "CARGAS", "PRIMAX_GL", "REDCOL_GL", "TOTAL_GL"]
+    cols_sol = [id_col, "CARGAS", "PRIMAX_S", "REDCOL_S", "TOTAL_S"]
     if modo.startswith("Galones"):
-        show = df_tab[cols_gal].copy()
-        ren = {"CARGAS": "# CARGAS", "PRIMAX_GL": "PRIMAX (GL)", "REDCOL_GL": "REDCOL (GL)", "TOTAL_GL": "TOTAL (GL)"}
+        show = df_tab[[c for c in cols_gal if c in df_tab.columns]].copy()
+        ren = {
+            "CARGAS": "# CARGAS",
+            "PRIMAX_GL": "PRIMAX (GL)",
+            "REDCOL_GL": "REDCOL (GL)",
+            "TOTAL_GL": "TOTAL (GL)",
+        }
         show = show.rename(columns={k: v for k, v in ren.items() if k in show.columns})
         for c in show.columns:
-            if c != "ESTACIÓN" and c != "# CARGAS":
+            if c not in (id_col, "# CARGAS"):
                 show[c] = show[c].apply(lambda x: f"{format_number(x, 2):,.2f}")
     else:
-        show = df_tab[cols_sol].copy()
+        show = df_tab[[c for c in cols_sol if c in df_tab.columns]].copy()
         ren = {
             "CARGAS": "# CARGAS",
             "PRIMAX_S": f"PRIMAX ({simbolo})",
@@ -1553,12 +1581,97 @@ def render_tabla_estaciones_red(df_reg, estacion_col, red_col, gal_col, precio_c
         }
         show = show.rename(columns={k: v for k, v in ren.items() if k in show.columns})
         for c in show.columns:
-            if c not in ("ESTACIÓN", "# CARGAS"):
+            if c not in (id_col, "# CARGAS"):
                 show[c] = show[c].apply(lambda x: f"{simbolo} {format_number(x, 2):,.2f}")
+    return show
+
+
+def construir_tabla_provincia(df_reg, prov_col, gal_col, precio_col, red_col):
+    """PRIMAX y REDCOL por provincia (galones y soles)."""
+    if df_reg is None or df_reg.empty or not prov_col or not gal_col or not red_col:
+        return pd.DataFrame()
+    df = df_reg.copy()
+    df[gal_col] = to_numeric_locale(df[gal_col])
+    col_m = precio_col if precio_col else resolver_columna_monto(df)
+    df["_MONTO"] = calcular_monto_fila(df, gal_col, col_m)
+    df["_RED"] = df[red_col].apply(tipo_proveedor_combustible)
+    df = df[df["_RED"].isin(["PRIMAX", "REDCOL"])]
+    if df.empty:
+        return pd.DataFrame()
+    filas = []
+    for prov in lista_unica_texto(df[prov_col]):
+        if not prov or str(prov).upper() in ("NAN", ""):
+            continue
+        sub = df[df[prov_col].astype(str) == prov]
+        p_mask = sub["_RED"] == "PRIMAX"
+        r_mask = sub["_RED"] == "REDCOL"
+        p_gal = float(sub.loc[p_mask, gal_col].sum())
+        r_gal = float(sub.loc[r_mask, gal_col].sum())
+        p_sol = float(sub.loc[p_mask, "_MONTO"].sum())
+        r_sol = float(sub.loc[r_mask, "_MONTO"].sum())
+        filas.append(
+            {
+                "PROVINCIA": prov,
+                "CARGAS": len(sub),
+                "PRIMAX_GL": p_gal,
+                "REDCOL_GL": r_gal,
+                "TOTAL_GL": p_gal + r_gal,
+                "PRIMAX_S": p_sol,
+                "REDCOL_S": r_sol,
+                "TOTAL_S": p_sol + r_sol,
+                "PART_%": 0.0,
+            }
+        )
+    out = pd.DataFrame(filas)
+    if out.empty:
+        return out
+    tot = float(out["TOTAL_GL"].sum())
+    out["PART_%"] = (out["TOTAL_GL"] / max(tot, 1) * 100).round(2)
+    return out.sort_values("TOTAL_GL", ascending=False)
+
+
+def render_tabla_provincia_red(df_reg, prov_col, gal_col, precio_col, red_col, simbolo):
+    st.markdown(
+        '<div class="section-title">Análisis de combustible por provincia — PRIMAX y REDCOL</div>',
+        unsafe_allow_html=True,
+    )
+    df_tab = construir_tabla_provincia(df_reg, prov_col, gal_col, precio_col, red_col)
+    if df_tab.empty:
+        aviso_amigable("Sin datos PRIMAX/REDCOL por provincia en el mes.")
+        return
+    tiene_soles = float(df_tab["TOTAL_S"].sum()) > 0
+    st.markdown('<span class="toolbar-label">Unidad</span>', unsafe_allow_html=True)
+    modo = _radio_unidad_gal_soles(simbolo, tiene_soles, "red_prov_unidad")
+    show = _formatear_tabla_red_dual(df_tab, modo, simbolo, "PROVINCIA")
+    show["Participación %"] = df_tab["PART_%"].apply(lambda x: f"{x:.2f}%")
+    st.caption(
+        "**Atenciones** = cantidad de abastecimientos en esa provincia (mes fiscal del panel). "
+        "Soles = suma SUB TOTAL/TOTAL del registro."
+    )
+    if not tiene_soles:
+        st.caption("Soles: use columna SUB TOTAL o TOTAL en hoja registro.")
+    st.dataframe(show, use_container_width=True, hide_index=True, height=420)
+
+
+def render_tabla_estaciones_red(df_reg, estacion_col, red_col, gal_col, precio_col, simbolo, red_tipo=None):
+    """Tabla por estación: siempre PRIMAX y REDCOL; galones o soles."""
+    st.markdown(
+        '<div class="section-title">Resumen por estación — PRIMAX y REDCOL</div>',
+        unsafe_allow_html=True,
+    )
+    df_tab = construir_tabla_estaciones(
+        df_reg, estacion_col, red_col, gal_col, precio_col, red_tipo=None
+    )
+    if df_tab.empty:
+        aviso_amigable("Sin abastecimientos PRIMAX/REDCOL por estación en el mes.")
+        return
+    tiene_soles = float(df_tab["TOTAL_S"].sum()) > 0
+    st.markdown('<span class="toolbar-label">Unidad</span>', unsafe_allow_html=True)
+    modo = _radio_unidad_gal_soles(simbolo, tiene_soles, "red_est_unidad")
+    show = _formatear_tabla_red_dual(df_tab, modo, simbolo, "ESTACIÓN")
     if not tiene_soles:
         st.caption(
-            "Soles no disponibles: agregue columna de importe/monto en la hoja **registro** "
-            "(ej. PRECIO, IMPORTE, MONTO)."
+            "Soles no disponibles: agregue columna de importe/monto en la hoja **registro**."
         )
     st.dataframe(show, use_container_width=True, hide_index=True, height=420)
 
@@ -2017,6 +2130,189 @@ def _resolver_hoja(xl, nombre_objetivo):
     return None
 
 
+def _resolver_hoja_fragmento(xl, fragmento):
+    frag = fragmento.strip().lower()
+    for hoja in xl.sheet_names:
+        hn = hoja.strip().lower().replace("ó", "o").replace("í", "i")
+        if frag in hn:
+            return hoja
+    return None
+
+
+URL_MODELO_CAMION_3D = (
+    "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/"
+    "2.0/CesiumMilkTruck/glTF-Binary/CesiumMilkTruck.glb"
+)
+URL_MODELO_AUTO_3D = (
+    "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/"
+    "2.0/Avocado/glTF-Binary/Avocado.glb"
+)
+
+
+def _url_modelo_3d_por_tipo(tipo_flota):
+    t = _texto_sin_acentos(str(tipo_flota or ""))
+    if any(k in t for k in ("TRACT", "CAMION", "CAMI", "VOLQU", "REMOL", "CISTER")):
+        return URL_MODELO_CAMION_3D
+    if any(k in t for k in ("AUTO", "PICK", "SUV", "VAN")):
+        return URL_MODELO_AUTO_3D
+    return URL_MODELO_CAMION_3D
+
+
+def _preparar_vehiculos(df):
+    df = normalizar_columnas(df)
+    if df.empty:
+        return df
+    if "PLACA" in df.columns:
+        df["PLACA"] = df["PLACA"].astype(str).str.strip().str.upper()
+    return df
+
+
+def _valor_ficha(val):
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return "—"
+    s = str(val).strip()
+    return s if s and s.upper() not in ("NAN", "N/A", "-", "NONE") else "—"
+
+
+def buscar_ficha_vehiculo(placa, df_veh, df_bdmes):
+    """Combina hoja TMDatosvehículo + BdMes por placa."""
+    placa = str(placa).strip().upper()
+    ficha = {"PLACA": placa}
+    if df_veh is not None and not df_veh.empty and "PLACA" in df_veh.columns:
+        fila = df_veh[df_veh["PLACA"] == placa]
+        if not fila.empty:
+            row = fila.iloc[0]
+            for col in df_veh.columns:
+                ficha[str(col)] = row[col]
+    if df_bdmes is not None and not df_bdmes.empty and "PLACA" in df_bdmes.columns:
+        fila_b = df_bdmes[df_bdmes["PLACA"] == placa]
+        if not fila_b.empty:
+            row = fila_b.iloc[0]
+            for c in ("TIPO", "MARCA", "MODELO", "CONDUCTOR", "CECO"):
+                if c in row.index and c not in ficha:
+                    ficha[c] = row[c]
+    return ficha
+
+
+def render_holograma_vehiculo(tipo_flota, marca, modelo):
+    """Visor 3D rotativo (model-viewer); requiere internet la primera vez."""
+    url = _url_modelo_3d_por_tipo(tipo_flota)
+    titulo = html.escape(f"{marca} {modelo}".strip() or "Vehículo de flota")
+    components.html(
+        f"""
+        <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
+        <div class="vehiculo-holo-wrap" style="
+            background: radial-gradient(ellipse at center, rgba(255,215,0,0.14) 0%, #0a0a0a 72%);
+            border: 1px solid rgba(255,215,0,0.35); border-radius: 16px; padding: 12px;">
+            <div style="text-align:center;color:#ffd700;font-weight:700;margin-bottom:8px;">{titulo}</div>
+            <model-viewer src="{html.escape(url)}"
+                alt="Modelo 3D"
+                auto-rotate rotation-per-second="18deg"
+                camera-controls touch-action="pan-y"
+                shadow-intensity="1"
+                exposure="1.1"
+                style="width:100%;height:360px;background:transparent;">
+            </model-viewer>
+            <div style="text-align:center;color:#888;font-size:11px;margin-top:6px;">
+                Arrastre para girar · rueda del mouse para zoom
+            </div>
+        </div>
+        """,
+        height=430,
+        scrolling=False,
+    )
+
+
+def render_tarjeta_spec(label, value):
+    st.markdown(
+        f'<div class="vehiculo-spec-card"><div class="spec-label">{html.escape(label)}</div>'
+        f'<div class="spec-value">{html.escape(str(value))}</div></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_vista_ficha_vehiculo(df_bdmes, df_vehiculos, mes_corto, simbolo):
+    show_update_info()
+    st.markdown('<div class="main-title">Ficha técnica — Flota SCE</div>', unsafe_allow_html=True)
+    placas_bd = (
+        sorted(df_bdmes["PLACA"].dropna().unique().tolist())
+        if df_bdmes is not None and not df_bdmes.empty and "PLACA" in df_bdmes.columns
+        else []
+    )
+    placas_tm = (
+        sorted(df_vehiculos["PLACA"].dropna().unique().tolist())
+        if df_vehiculos is not None and not df_vehiculos.empty and "PLACA" in df_vehiculos.columns
+        else []
+    )
+    placas = sorted(set(placas_bd) | set(placas_tm))
+    if not placas:
+        aviso_amigable("No hay placas en BdMes ni en TMDatosvehículo.")
+        return
+    placa_sel = st.selectbox("Seleccione placa", placas, key="ficha_placa_sel")
+    ficha = buscar_ficha_vehiculo(placa_sel, df_vehiculos, df_bdmes)
+    tipo = _valor_ficha(
+        ficha.get("TIPO")
+        or ficha.get("TIPO DE VEHICULO")
+        or ficha.get("TIPO DE VEHICULO2")
+    )
+    marca = _valor_ficha(ficha.get("MARCA"))
+    modelo = _valor_ficha(ficha.get("MODELO"))
+    col_3d, col_specs = st.columns([1.1, 1])
+    with col_3d:
+        st.markdown('<div class="section-title">Vista 3D</div>', unsafe_allow_html=True)
+        render_holograma_vehiculo(tipo, marca, modelo)
+        st.caption(
+            "Modelo 3D genérico según tipo de flota (camión/tracto). "
+            "Los datos técnicos salen de su Excel **TMDatosvehículo**."
+        )
+    with col_specs:
+        st.markdown('<div class="section-title">Características</div>', unsafe_allow_html=True)
+        render_tarjeta_spec("Placa", placa_sel)
+        render_tarjeta_spec("Tipo de flota", tipo)
+        render_tarjeta_spec("Marca", marca)
+        render_tarjeta_spec("Modelo", modelo)
+        render_tarjeta_spec("Año", _valor_ficha(ficha.get("AÑO") or ficha.get("ANO")))
+        render_tarjeta_spec("Conductor", _valor_ficha(ficha.get("CONDUCTOR")))
+        render_tarjeta_spec("CECO / Área", _valor_ficha(ficha.get("CECO")))
+        render_tarjeta_spec("Tanque combustible", _valor_ficha(ficha.get("TANQUE DE COMBUSTIBLE")))
+        render_tarjeta_spec("Combustible", _valor_ficha(ficha.get("COMBUSTIBLE")))
+        render_tarjeta_spec("Ejes", _valor_ficha(ficha.get("EJES")))
+        render_tarjeta_spec("Dimensiones (L × A × Al)", (
+            f"{_valor_ficha(ficha.get('LARGO'))} × "
+            f"{_valor_ficha(ficha.get('ANCHO'))} × "
+            f"{_valor_ficha(ficha.get('ALTO'))} m"
+        ))
+        render_tarjeta_spec("Peso bruto", _valor_ficha(ficha.get("PESO BRUTO")))
+        render_tarjeta_spec("Capacidad (TN)", _valor_ficha(ficha.get("CAPACIDAD TN")))
+        rpm_val = "—"
+        for clave, val in ficha.items():
+            if "RPM" in str(clave).upper() or "REVOLUCION" in str(clave).upper():
+                rpm_val = _valor_ficha(val)
+                break
+        render_tarjeta_spec("RPM", rpm_val)
+    if df_bdmes is not None and not df_bdmes.empty and mes_corto:
+        cols = columnas_mes(mes_corto, df_bdmes.columns)
+        fila_m = df_bdmes[df_bdmes["PLACA"] == placa_sel]
+        if not fila_m.empty and cols["gal"] in df_bdmes.columns:
+            st.markdown('<div class="divider-line"></div>', unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="section-title">Consumo — {MESES_COMPLETOS.get(mes_corto, mes_corto)}</div>',
+                unsafe_allow_html=True,
+            )
+            r = fila_m.iloc[0]
+            c1, c2, c3, c4 = st.columns(4)
+            render_kpi_beautiful(
+                c1, "Galones", f"{format_number(r.get(cols['gal'], 0), 2):,.2f}", "GL"
+            )
+            render_kpi_beautiful(c2, "Kilómetros", f"{format_number(r.get(cols['km'], 0), 2):,.2f}", "KM")
+            render_kpi_beautiful(
+                c3, "Rendimiento", f"{format_number(r.get(cols['ren'], 0), 2):,.2f}", "KM/G"
+            )
+            render_kpi_beautiful(
+                c4, "Gasto", f"{simbolo} {format_number(r.get(cols['sub'], 0), 2):,.2f}"
+            )
+
+
 def _preparar_bdmes(df):
     df = normalizar_columnas(df)
     if df.empty:
@@ -2069,6 +2365,7 @@ def _preparar_registro(df):
 def cargar_datos_sharepoint():
     df_bdmes = pd.DataFrame()
     df_registro = pd.DataFrame()
+    df_vehiculos = pd.DataFrame()
     errores = []
     url = _excel_url()
     try:
@@ -2095,6 +2392,11 @@ def cargar_datos_sharepoint():
             df_bd_raw = pd.read_excel(xl, sheet_name=hoja_bd, engine="openpyxl")
             if es_hoja_registro_detalle(df_bd_raw):
                 df_registro = _preparar_registro(df_bd_raw)
+        hoja_veh = _resolver_hoja_fragmento(xl, "datosveh")
+        if hoja_veh:
+            df_vehiculos = _preparar_vehiculos(
+                pd.read_excel(xl, sheet_name=hoja_veh, engine="openpyxl")
+            )
     except requests.HTTPError as exc:
         cod = getattr(getattr(exc, "response", None), "status_code", "?")
         errores.append(
@@ -2103,7 +2405,7 @@ def cargar_datos_sharepoint():
         )
     except Exception as exc:
         errores.append(f"{exc} (origen URL: {_origen_excel_url()})")
-    return df_bdmes, df_registro, errores
+    return df_bdmes, df_registro, df_vehiculos, errores
 
 
 def filtrar_registro(df_reg, mes_corto, placas=None):
@@ -2381,9 +2683,10 @@ def show_update_info():
     now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
     st.markdown(f'<div class="update-info">✓ Última actualización: {now} | Caché: Cada 5 min</div>', unsafe_allow_html=True)
 
-df_raw, df_estaciones, _errores_carga = cargar_datos_sharepoint()
+df_raw, df_estaciones, df_vehiculos, _errores_carga = cargar_datos_sharepoint()
 _bdmes_ok = df_raw is not None and not df_raw.empty
 _registro_ok = df_estaciones is not None and not df_estaciones.empty
+_vehiculos_ok = df_vehiculos is not None and not df_vehiculos.empty
 
 if _bdmes_ok or _registro_ok:
     if _errores_carga:
@@ -2391,9 +2694,9 @@ if _bdmes_ok or _registro_ok:
             for err in _errores_carga:
                 st.caption(f"⚠ {err}")
 
-if _bdmes_ok:
+if _bdmes_ok or _registro_ok or _vehiculos_ok:
     orden_meses = ["ENE", "FEB", "MAR", "ABR", "MAY", "JUN", "JUL", "AGO", "SET", "OCT", "NOV", "DIC"]
-    meses_final = meses_en_bdmes(df_raw, orden_meses)
+    meses_final = meses_en_bdmes(df_raw, orden_meses) if _bdmes_ok else orden_meses
     factor = 1.0
     simbolo = "S/."
 
@@ -2527,6 +2830,15 @@ if _bdmes_ok:
                     if st.button("Limpiar filtros Red", use_container_width=True):
                         _limpiar_filtros_redes()
                         st.rerun()
+            elif menu == VISTA_FICHA_VEHICULO:
+                df_base = df_raw.copy() if _bdmes_ok else pd.DataFrame()
+                df_f1 = df_base.copy()
+                df_f2 = df_base.copy()
+                df_ceco = pd.DataFrame()
+                col_display = "PLACA"
+                meta_kmg = 11.50
+                filtro_detalle = False
+                st.caption("Elija la placa en la pantalla principal.")
             else:
                 df_base = df_raw.copy()
                 df_f1 = df_base.copy()
@@ -2932,57 +3244,20 @@ if _bdmes_ok:
                         galones_col,
                         precio_col_reg,
                         simbolo,
-                        red_tipo=st.session_state.get("dep_red_tipo"),
                     )
 
                 st.markdown('<div class="divider-line"></div>', unsafe_allow_html=True)
-                st.markdown(
-                    '<div class="section-title">Análisis de Combustible por Provincia</div>',
-                    unsafe_allow_html=True,
-                )
-
-                if galones_col and galones_col in df_datos.columns:
-                    df_combustible = df_datos.copy()
-                    df_combustible[galones_col] = to_numeric_locale(df_combustible[galones_col])
-                    df_comb_prov = (
-                        df_combustible.groupby(prov_col)
-                        .agg(Galones=(galones_col, "sum"), Atenciones=(galones_col, "count"))
-                        .reset_index()
+                if prov_col and red_col and galones_col:
+                    render_tabla_provincia_red(
+                        df_datos, prov_col, galones_col, precio_col_reg, red_col, simbolo
                     )
-                    total_galones_prov = df_comb_prov["Galones"].sum()
-                    df_comb_prov["Participación %"] = (
-                        df_comb_prov["Galones"] / max(total_galones_prov, 1) * 100
-                    ).round(2)
-                    if red_col and red_col in df_combustible.columns:
-                        primax_gal_list = []
-                        redcol_gal_list = []
-                        for prov in df_comb_prov[prov_col]:
-                            prov_data = df_combustible[df_combustible[prov_col] == prov]
-                            mask_p = prov_data[red_col].astype(str).str.upper().str.contains("PRIMAX", na=False)
-                            mask_r = prov_data[red_col].astype(str).str.upper().str.contains("REDCOL", na=False)
-                            primax_gal_list.append(
-                                f"{format_number(prov_data.loc[mask_p, galones_col].sum(), 2):.2f}"
-                            )
-                            redcol_gal_list.append(
-                                f"{format_number(prov_data.loc[mask_r, galones_col].sum(), 2):.2f}"
-                            )
-                        df_comb_prov["PRIMAX (GL)"] = primax_gal_list
-                        df_comb_prov["REDCOL (GL)"] = redcol_gal_list
-                    df_comb_prov["Galones"] = df_comb_prov["Galones"].apply(
-                        lambda x: f"{format_number(x, 2):.2f}"
-                    )
-                    df_comb_prov["Participación %"] = df_comb_prov["Participación %"].apply(
-                        lambda x: f"{x:.2f}%"
-                    )
-                    df_comb_prov = df_comb_prov.sort_values(by="Atenciones", ascending=False)
-                    st.caption(
-                        "**Atenciones** = cantidad de abastecimientos (registros de carga) en esa provincia del mes."
-                    )
-                    st.dataframe(df_comb_prov, use_container_width=True, hide_index=True)
+                    st.markdown('<div class="divider-line"></div>', unsafe_allow_html=True)
                     st.markdown(
                         '<div class="section-title">Galones por provincia — PRIMAX vs REDCOL</div>',
                         unsafe_allow_html=True,
                     )
+                    df_combustible = df_datos.copy()
+                    df_combustible[galones_col] = to_numeric_locale(df_combustible[galones_col])
                     if red_col and red_col in df_combustible.columns:
                         filas_chart = []
                         for prov in df_combustible[prov_col].unique():
@@ -3032,6 +3307,12 @@ if _bdmes_ok:
                             aviso_amigable("Sin galones PRIMAX/REDCOL para graficar.")
                     else:
                         aviso_amigable("Columna de proveedor no disponible en registro.")
+
+    elif menu == VISTA_FICHA_VEHICULO:
+        if not _bdmes_ok and not _vehiculos_ok:
+            aviso_amigable("Cargue BdMes o la hoja TMDatosvehículo en el Excel de SharePoint.")
+        else:
+            render_vista_ficha_vehiculo(df_raw if _bdmes_ok else pd.DataFrame(), df_vehiculos, mes_sel_corto, simbolo)
 else:
     st.markdown('<div class="main-title">LOGISTIX AI | SCE</div>', unsafe_allow_html=True)
     aviso_amigable("No se pudo cargar el Excel desde SharePoint.")
