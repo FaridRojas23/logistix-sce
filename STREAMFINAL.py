@@ -1,7 +1,9 @@
 import html
+import io
 import os
 import re
 import unicodedata
+import requests
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -26,6 +28,90 @@ def _excel_url():
     except Exception:
         pass
     return os.environ.get("EXCEL_URL", EXCEL_URL_DEFAULT).strip()
+
+
+def _normalizar_url_sharepoint(url):
+    """
+    Convierte enlaces tipo :x:/g/... (vista web) a download.aspx (archivo .xlsx).
+    """
+    url = (url or "").strip().strip('"').strip("'")
+    if not url:
+        return url
+    m = re.search(
+        r"(https://[^/]+)/:x:/g/personal/([^/]+)/([^/?#]+)",
+        url,
+        re.IGNORECASE,
+    )
+    if m:
+        base, usuario, share_id = m.group(1), m.group(2), m.group(3)
+        return f"{base}/personal/{usuario}/_layouts/15/download.aspx?share={share_id}"
+    return url
+
+
+def _urls_a_probar(url):
+    """Variantes de enlace SharePoint/OneDrive para descarga anónima."""
+    url = _normalizar_url_sharepoint(url)
+    if not url:
+        return []
+    urls = [url]
+    if "download=1" not in url.lower() and "download.aspx" in url.lower():
+        sep = "&" if "?" in url else "?"
+        urls.append(f"{url}{sep}download=1")
+    return list(dict.fromkeys(urls))
+
+
+def _abrir_excel_remoto(url):
+    """
+    Descarga el .xlsx desde SharePoint (Render no puede usar el enlace como en tu PC).
+    Requiere enlace compartido: cualquier persona con el enlace puede ver/descargar.
+    """
+    candidatos = _urls_a_probar(url)
+    if not candidatos:
+        raise ValueError(
+            "EXCEL_URL no está configurada. En Render → Environment → agregue EXCEL_URL."
+        )
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept": "*/*",
+    }
+    ultimo_error = None
+    for intento_url in candidatos:
+        try:
+            resp = requests.get(
+                intento_url, headers=headers, allow_redirects=True, timeout=120
+            )
+            if resp.status_code in (401, 403):
+                raise PermissionError(
+                    f"SharePoint respondió {resp.status_code}. El enlace no es público para internet: "
+                    "use Compartir → *Cualquier persona con el enlace* (no solo SCE)."
+                )
+            resp.raise_for_status()
+            if len(resp.content) < 2048 or resp.content[:2] != b"PK":
+                tipo = (resp.headers.get("content-type") or "desconocido")[:60]
+                raise ValueError(
+                    f"La URL devolvió HTML o vacío (tipo: {tipo}), no un Excel. "
+                    "Copie el enlace de *descarga* del archivo .xlsx."
+                )
+            buf = io.BytesIO(resp.content)
+            buf.seek(0)
+            return buf
+        except Exception as exc:
+            ultimo_error = exc
+    raise ultimo_error or ValueError("No se pudo descargar el Excel.")
+
+
+def _origen_excel_url():
+    try:
+        if hasattr(st, "secrets") and "EXCEL_URL" in st.secrets:
+            return "Streamlit secrets"
+    except Exception:
+        pass
+    if os.environ.get("EXCEL_URL"):
+        return "variable Render EXCEL_URL"
+    return "enlace por defecto del código (configure EXCEL_URL en Render)"
 
 
 MSG_NO_DATA = "Dato no disponible por el momento"
@@ -820,6 +906,13 @@ COLORES_SEMAFORO_FILA = {
 }
 
 
+def _texto_sin_acentos(s):
+    if s is None:
+        return ""
+    t = unicodedata.normalize("NFD", str(s))
+    return "".join(c for c in t if unicodedata.category(c) != "Mn").upper()
+
+
 def codigo_ceco_a_str(val):
     """Normaliza código CECO (1001.0 → '1001')."""
     if pd.isna(val) or val is None:
@@ -834,38 +927,57 @@ def codigo_ceco_a_str(val):
         return s if s and s not in ("NAN", "N/A", "") else None
 
 
-def cargar_mapa_ceco(xl, url):
-    """Hoja TMCeco: columna A = código, columna B = nombre del área."""
+def _es_fila_encabezado_tmceco(cod, nom):
+    n = _texto_sin_acentos(nom)
+    if not cod and not n:
+        return True
+    if n in ("NAN", "N/A"):
+        return True
+    if "AREA DEL CECO" in n or "CENTRO DE COSTO" in n:
+        return True
+    if "CECO" in n and ("AREA" in n or "CENTRO" in n):
+        return True
+    return False
+
+
+def cargar_mapa_ceco(xl):
+    """Hoja TMCeco: código (col. CECO / Centro de costo) → nombre del área."""
     mapa = {}
     hoja = _resolver_hoja(xl, "TMCeco")
     if not hoja:
         return mapa
     try:
-        df = pd.read_excel(url, sheet_name=hoja, engine="openpyxl")
+        df = pd.read_excel(xl, sheet_name=hoja, engine="openpyxl")
     except Exception:
         return mapa
     if df.empty or df.shape[1] < 2:
         return mapa
-    col_cod, col_nom = df.columns[0], df.columns[1]
+    col_cod = buscar_columna(df, "CECO", "CENTRO DE COSTO", "CENTRODECOSTO") or df.columns[0]
+    otras = [c for c in df.columns if c != col_cod]
+    col_nom = buscar_columna(df, "AREA", "NOMBRE", "DESCRIPCION")
+    if not col_nom or col_nom == col_cod:
+        col_nom = otras[0] if otras else df.columns[1]
     for _, row in df.iterrows():
         cod = codigo_ceco_a_str(row[col_cod])
         nom = str(row[col_nom]).strip().upper()
-        if not cod or not nom:
+        if _es_fila_encabezado_tmceco(cod, nom):
             continue
-        if nom in ("NAN", "N/A") or "ÁREA" in nom or "CENTRO DE COSTO" in nom:
+        if not cod or not nom:
             continue
         mapa[cod] = nom
     return mapa
 
 
 def resolver_nombre_ceco(val, mapa_ceco):
-    """Código → nombre (TMCeco). Vacío o sin mapeo → etiqueta visible (no celda en blanco)."""
+    """Código → nombre (TMCeco). Vacío, 0 o sin mapeo → etiqueta visible."""
     if pd.isna(val) or val is None:
         return "SIN CECO ASIGNADO"
     s_raw = str(val).strip()
-    if s_raw.upper() in ("", "NAN", "N/A", "NONE", "NULL"):
+    if s_raw.upper() in ("", "NAN", "N/A", "NONE", "NULL", "0"):
         return "SIN CECO ASIGNADO"
     cod = codigo_ceco_a_str(val)
+    if cod in ("0", "00"):
+        return "SIN CECO ASIGNADO"
     if mapa_ceco:
         if cod and cod in mapa_ceco:
             return mapa_ceco[cod]
@@ -875,6 +987,8 @@ def resolver_nombre_ceco(val, mapa_ceco):
         if cod:
             return f"CECO NO MAPEADO (cód. {cod})"
         return f"CECO NO MAPEADO ({s})"
+    if cod:
+        return f"CECO {cod} (sin catálogo TMCeco)"
     return s_raw.upper()
 
 
@@ -1505,14 +1619,45 @@ def render_selector_vista():
     return st.session_state.menu_vista
 
 
+def construir_excel_auditoria(df_a, c_km, c_gal, c_ren, c_sub, meta_kmg, col_display, factor=1.0):
+    """Genera .xlsx con valores numéricos (aptos para análisis en Excel)."""
+    col_id = etiqueta_columna_id(col_display)
+    filas = {col_id: serie_display(df_a, col_display)}
+    if "CECO" in df_a.columns:
+        filas["CECO"] = df_a["CECO"].astype(str)
+    for c in ("TIPO", "MARCA", "MODELO", "CONDUCTOR"):
+        if c in df_a.columns:
+            filas[c] = df_a[c]
+    filas["KM"] = pd.to_numeric(df_a[c_km], errors="coerce")
+    filas["GALONES"] = pd.to_numeric(df_a[c_gal], errors="coerce")
+    filas["RENDIMIENTO"] = pd.to_numeric(df_a[c_ren], errors="coerce")
+    filas["COSTO"] = pd.to_numeric(df_a[c_sub], errors="coerce") * factor
+    filas["ESTADO"] = df_a[c_ren].apply(lambda x: get_semaforo_rendimiento(x, meta_kmg)[0])
+    df_x = pd.DataFrame(filas)
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df_x.to_excel(writer, index=False, sheet_name="Auditoria")
+    buf.seek(0)
+    return buf.getvalue()
+
+
 def render_tabla_auditoria(
-    df_dashboard, c_km, c_gal, c_ren, c_sub, meta_kmg, simbolo, factor, col_display="PLACA"
+    df_dashboard,
+    c_km,
+    c_gal,
+    c_ren,
+    c_sub,
+    meta_kmg,
+    simbolo,
+    factor,
+    col_display="PLACA",
+    mes_label="",
 ):
     """Tabla de auditoría con semáforo por fila y orden por rendimiento."""
     if df_dashboard is None or df_dashboard.empty:
         aviso_amigable()
         return
-    c1, c2 = st.columns([1.2, 1])
+    c1, c2, c3 = st.columns([1.4, 1, 0.55])
     with c1:
         st.markdown('<div class="section-title">Auditoría Completa - Tabla de Control</div>', unsafe_allow_html=True)
     with c2:
@@ -1529,6 +1674,22 @@ def render_tabla_auditoria(
         df_a = df_a.sort_values(c_ren, ascending=True)
     else:
         df_a = df_a.sort_values("PLACA")
+
+    mes_slug = re.sub(r"[^\w\-]+", "_", (mes_label or "mes")).strip("_") or "mes"
+    nombre_archivo = f"auditoria_sce_{mes_slug}_{datetime.now():%Y%m%d_%H%M}.xlsx"
+    excel_bytes = construir_excel_auditoria(
+        df_a, c_km, c_gal, c_ren, c_sub, meta_kmg, col_display, factor
+    )
+    with c3:
+        st.download_button(
+            label="Exportar Excel",
+            data=excel_bytes,
+            file_name=nombre_archivo,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            key="btn_export_auditoria",
+            help="Descarga la tabla visible (filtros y orden aplicados), con CECO y valores numéricos.",
+        )
 
     df_a["_ESTADO_TXT"] = df_a[c_ren].apply(lambda x: get_semaforo_rendimiento(x, meta_kmg)[0])
     df_a["_ID"] = serie_display(df_a, col_display)
@@ -1818,10 +1979,9 @@ def _preparar_bdmes(df):
     cond_col = buscar_columna(df, "CONDUCTOR")
     if cond_col and cond_col != "CONDUCTOR":
         df = df.rename(columns={cond_col: "CONDUCTOR"})
-    if "CECO" in df.columns:
-        df["CECO"] = df["CECO"].apply(
-            lambda v: str(v).strip().upper().replace("NAN", "") if pd.notna(v) else ""
-        )
+    ceco_col = buscar_columna(df, "CECO", "CENTRO DE COSTO", "CENTRODECOSTO")
+    if ceco_col and ceco_col != "CECO":
+        df = df.rename(columns={ceco_col: "CECO"})
     for col in ["MARCA", "MODELO", "TIPO"]:
         if col in df.columns:
             df[col] = df[col].astype(str).str.upper().replace("NAN", "N/A")
@@ -1863,25 +2023,37 @@ def cargar_datos_sharepoint():
     errores = []
     url = _excel_url()
     try:
-        xl = pd.ExcelFile(url, engine="openpyxl")
-        mapa_ceco = cargar_mapa_ceco(xl, url)
+        buf = _abrir_excel_remoto(url)
+        xl = pd.ExcelFile(buf, engine="openpyxl")
+        mapa_ceco = cargar_mapa_ceco(xl)
+        if not mapa_ceco:
+            errores.append(
+                "No se cargó la hoja TMCeco (catálogo CECO). "
+                "Revise que exista y tenga código + nombre de área."
+            )
         hoja_bd = _resolver_hoja(xl, "BdMes")
         hoja_reg = _resolver_hoja(xl, "registro")
         if hoja_bd:
-            df_bdmes = _preparar_bdmes(pd.read_excel(url, sheet_name=hoja_bd, engine="openpyxl"))
+            df_bdmes = _preparar_bdmes(pd.read_excel(xl, sheet_name=hoja_bd, engine="openpyxl"))
             df_bdmes = aplicar_nombres_ceco_df(df_bdmes, mapa_ceco)
         else:
             errores.append("Hoja BdMes no encontrada en SharePoint.")
         if hoja_reg:
-            df_registro = _preparar_registro(pd.read_excel(url, sheet_name=hoja_reg, engine="openpyxl"))
+            df_registro = _preparar_registro(pd.read_excel(xl, sheet_name=hoja_reg, engine="openpyxl"))
         else:
             errores.append('Hoja "registro" no encontrada en SharePoint.')
         if (df_registro is None or df_registro.empty) and hoja_bd:
-            df_bd_raw = pd.read_excel(url, sheet_name=hoja_bd, engine="openpyxl")
+            df_bd_raw = pd.read_excel(xl, sheet_name=hoja_bd, engine="openpyxl")
             if es_hoja_registro_detalle(df_bd_raw):
                 df_registro = _preparar_registro(df_bd_raw)
+    except requests.HTTPError as exc:
+        cod = getattr(getattr(exc, "response", None), "status_code", "?")
+        errores.append(
+            f"HTTP {cod} desde Render. Origen URL: {_origen_excel_url()}. "
+            "SharePoint debe ser público (cualquier persona con el enlace)."
+        )
     except Exception as exc:
-        errores.append(f"No se pudo conectar al Excel en SharePoint. ({type(exc).__name__})")
+        errores.append(f"{exc} (origen URL: {_origen_excel_url()})")
     return df_bdmes, df_registro, errores
 
 
@@ -2178,6 +2350,9 @@ if _bdmes_ok:
 
     with st.sidebar:
         st.markdown('<div class="sidebar-brand">Socorro Cargo Express</div>', unsafe_allow_html=True)
+        if st.button("Actualizar Excel ahora", use_container_width=True, help="F5 no limpia la caché de 5 minutos"):
+            st.cache_data.clear()
+            st.rerun()
 
         menu = render_selector_vista()
 
@@ -2311,7 +2486,7 @@ if _bdmes_ok:
                 col_display = "PLACA"
                 meta_kmg = 11.50
                 filtro_detalle = False
-
+        
         st.divider()
         if st.button("🔄 Actualizar Datos (F5)"):
             st.cache_data.clear()
@@ -2377,9 +2552,9 @@ if _bdmes_ok:
         )
     else:
         df_reg_redes_base = pd.DataFrame()
-        df_reg_vista = filtrar_registro(
-            df_estaciones if _registro_ok else pd.DataFrame(),
-            mes_sel_corto,
+    df_reg_vista = filtrar_registro(
+        df_estaciones if _registro_ok else pd.DataFrame(),
+        mes_sel_corto,
             placas_scope,
         )
     df_reg_trim = filtrar_registro_meses(
@@ -2446,9 +2621,8 @@ if _bdmes_ok:
                 sin_map = df_raw["CECO"].astype(str).str.contains("NO MAPEADO|SIN CECO", na=False).sum()
                 if sin_map > 0:
                     st.caption(
-                        f"ℹ {sin_map} registro(s) con CECO vacío o sin nombre en hoja **TMCeco** "
-                        f"(se muestran como *SIN CECO ASIGNADO* o *CECO NO MAPEADO*). "
-                        f"Agregue el código en TMCeco columna A/B para corregirlo."
+                        f"ℹ {sin_map} unidad(es) con CECO vacío, código **0** o sin nombre en **TMCeco**. "
+                        f"En BdMes asigne el código (ej. 1004) y en TMCeco el nombre del área."
                     )
                 for mes in meses_ord:
                     etiqueta = MESES_COMPLETOS.get(mes, mes)
@@ -2476,22 +2650,22 @@ if _bdmes_ok:
             else:
                 aviso_amigable("CECO no disponible en BdMes.")
 
-        st.markdown('<div class="divider-line"></div>', unsafe_allow_html=True)
-
+            st.markdown('<div class="divider-line"></div>', unsafe_allow_html=True)
+        
     elif menu == VISTA_POR_FLOTA:
         show_update_info()
         if filtro_detalle and hay_datos and cols_mes_ok:
             st.markdown(f'<div class="main-title">Por Flota — {mes_sel}</div>', unsafe_allow_html=True)
 
             g_total = df_dashboard[c_sub].sum() * factor
-        
+            
             c1, c2, c3, c4, c5 = st.columns(5)
             render_kpi_beautiful(c1, "GASTO TOTAL", f"{simbolo} {g_total:,.2f}")
             render_kpi_beautiful(c2, "EJECUCIÓN PR.", f"{format_number((df_dashboard[c_sub].sum()/df_raw[c_sub].sum()*100 if df_raw[c_sub].sum()>0 else 0), 2):.2f}%")
             render_kpi_beautiful(c3, "RENDIMIENTO", f"{format_number(df_dashboard[c_ren].mean(), 2):.2f}", "KM/G")
             render_kpi_beautiful(c4, "KM TOTALES", f"{format_number(df_dashboard[c_km].sum(), 2):,.2f}")
             render_kpi_beautiful(c5, "DISPONIBILIDAD", f"{unidades_seleccionadas}/{total_unidades}")
-        
+            
             c6, c7, c8, c9, c10 = st.columns(5)
             render_kpi_beautiful(c6, "COSTO x KM", f"{simbolo} {format_number(g_total/max(df_dashboard[c_km].sum(), 1), 2):.2f}")
             render_kpi_beautiful(c7, "< META", f"{len(df_dashboard[df_dashboard[c_ren]<meta_kmg])}", "Und.")
@@ -2519,11 +2693,11 @@ if _bdmes_ok:
                 fig_rend.update_yaxes(showgrid=True, gridwidth=1, gridcolor='#1a1a1a')
                 st.plotly_chart(fig_rend, use_container_width=True, config={'displayModeBar': False})
             with c2:
-                    st.markdown('<div class="section-title">Distribución de Gasto</div>', unsafe_allow_html=True)
-                    fig_tree = px.treemap(df_dashboard, path=['TIPO', 'MARCA', 'PLACA'], values=c_sub, color=c_sub, 
-                                        color_continuous_scale='Viridis', template="plotly_dark")
-                    fig_tree.update_layout(height=320, coloraxis_showscale=False, paper_bgcolor='#000000', plot_bgcolor='#000000', margin=dict(l=0, r=0, t=20, b=20))
-                    st.plotly_chart(fig_tree, use_container_width=True, config={'displayModeBar': False})
+                st.markdown('<div class="section-title">Distribución de Gasto</div>', unsafe_allow_html=True)
+                fig_tree = px.treemap(df_dashboard, path=['TIPO', 'MARCA', 'PLACA'], values=c_sub, color=c_sub, 
+                                    color_continuous_scale='Viridis', template="plotly_dark")
+                fig_tree.update_layout(height=320, coloraxis_showscale=False, paper_bgcolor='#000000', plot_bgcolor='#000000', margin=dict(l=0, r=0, t=20, b=20))
+                st.plotly_chart(fig_tree, use_container_width=True, config={'displayModeBar': False})
 
             st.markdown('<div class="divider-line"></div>', unsafe_allow_html=True)
             st.markdown('<div class="section-title">Análisis Pareto - Impacto Económico</div>', unsafe_allow_html=True)
@@ -2546,36 +2720,45 @@ if _bdmes_ok:
             col_id = etiqueta_columna_id(col_display)
             t1, t2, t3, t4 = st.columns(4)
             with t1:
-                    st.markdown('<div class="header-top bg-success">Top 5 Eficiencia</div>', unsafe_allow_html=True)
-                    df_top = df_dashboard.nlargest(5, c_ren).copy()
-                    df_top[col_id] = serie_display(df_top, col_display)
-                    df_top = df_top[[col_id, c_ren]]
-                    df_top[c_ren] = df_top[c_ren].apply(lambda x: f"{format_number(x, 2):.2f}")
-                    st.dataframe(df_top, hide_index=True, use_container_width=True)
+                st.markdown('<div class="header-top bg-success">Top 5 Eficiencia</div>', unsafe_allow_html=True)
+                df_top = df_dashboard.nlargest(5, c_ren).copy()
+                df_top[col_id] = serie_display(df_top, col_display)
+                df_top = df_top[[col_id, c_ren]]
+                df_top[c_ren] = df_top[c_ren].apply(lambda x: f"{format_number(x, 2):.2f}")
+                st.dataframe(df_top, hide_index=True, use_container_width=True)
             with t2:
-                    st.markdown('<div class="header-top bg-danger">Críticos</div>', unsafe_allow_html=True)
-                    df_crit = df_dashboard.nsmallest(5, c_ren).copy()
-                    df_crit[col_id] = serie_display(df_crit, col_display)
-                    df_crit = df_crit[[col_id, c_ren]]
-                    df_crit[c_ren] = df_crit[c_ren].apply(lambda x: f"{format_number(x, 2):.2f}")
-                    st.dataframe(df_crit, hide_index=True, use_container_width=True)
+                st.markdown('<div class="header-top bg-danger">Críticos</div>', unsafe_allow_html=True)
+                df_crit = df_dashboard.nsmallest(5, c_ren).copy()
+                df_crit[col_id] = serie_display(df_crit, col_display)
+                df_crit = df_crit[[col_id, c_ren]]
+                df_crit[c_ren] = df_crit[c_ren].apply(lambda x: f"{format_number(x, 2):.2f}")
+                st.dataframe(df_crit, hide_index=True, use_container_width=True)
             with t3:
-                    st.markdown(f'<div class="header-top bg-warning">Mayor Gasto</div>', unsafe_allow_html=True)
-                    df_g = df_dashboard.nlargest(5, c_sub).copy()
-                    df_g[col_id] = serie_display(df_g, col_display)
-                    df_g[c_sub] = df_g[c_sub].apply(lambda x: f"{simbolo} {format_number(x * factor, 2):.2f}")
-                    st.dataframe(df_g[[col_id, c_sub]], hide_index=True, use_container_width=True)
+                st.markdown(f'<div class="header-top bg-warning">Mayor Gasto</div>', unsafe_allow_html=True)
+                df_g = df_dashboard.nlargest(5, c_sub).copy()
+                df_g[col_id] = serie_display(df_g, col_display)
+                df_g[c_sub] = df_g[c_sub].apply(lambda x: f"{simbolo} {format_number(x * factor, 2):.2f}")
+                st.dataframe(df_g[[col_id, c_sub]], hide_index=True, use_container_width=True)
             with t4:
-                    st.markdown('<div class="header-top bg-info">Mayor KM</div>', unsafe_allow_html=True)
-                    df_km = df_dashboard.nlargest(5, c_km).copy()
-                    df_km[col_id] = serie_display(df_km, col_display)
-                    df_km = df_km[[col_id, c_km]]
-                    df_km[c_km] = df_km[c_km].apply(lambda x: f"{format_number(x, 2):.2f}")
-                    st.dataframe(df_km, hide_index=True, use_container_width=True)
+                st.markdown('<div class="header-top bg-info">Mayor KM</div>', unsafe_allow_html=True)
+                df_km = df_dashboard.nlargest(5, c_km).copy()
+                df_km[col_id] = serie_display(df_km, col_display)
+                df_km = df_km[[col_id, c_km]]
+                df_km[c_km] = df_km[c_km].apply(lambda x: f"{format_number(x, 2):.2f}")
+                st.dataframe(df_km, hide_index=True, use_container_width=True)
 
             st.markdown('<div class="divider-line"></div>', unsafe_allow_html=True)
             render_tabla_auditoria(
-                df_dashboard, c_km, c_gal, c_ren, c_sub, meta_kmg, simbolo, factor, col_display
+                df_dashboard,
+                c_km,
+                c_gal,
+                c_ren,
+                c_sub,
+                meta_kmg,
+                simbolo,
+                factor,
+                col_display,
+                mes_label=mes_sel,
             )
         elif filtro_detalle:
             aviso_amigable(
@@ -2635,7 +2818,7 @@ if _bdmes_ok:
                 if df_reg_redes_base is not None and not df_reg_redes_base.empty
                 else df_estaciones
             )
-
+            
             if prov_col is None:
                 st.markdown(
                     '<div class="warning-box">Columna PROVINCIA no encontrada en Registro.</div>',
@@ -2692,7 +2875,6 @@ if _bdmes_ok:
                     f"Mes **{mes_sel}**: {n_abast} cargas. "
                     "**ABAST. PRIMAX/REDCOL** = cantidad de registros, no estaciones físicas."
                 )
-
                 st.markdown('<div class="divider-line"></div>', unsafe_allow_html=True)
                 render_tabla_abastecimiento_departamento(
                     df_dep,
@@ -2788,8 +2970,8 @@ if _bdmes_ok:
                         "Mapa no disponible: provincias sin coordenadas en el catálogo. "
                         "KPIs y tablas siguen mostrando todos los registros del mes."
                     )
-
-                st.markdown('<div class="divider-line"></div>', unsafe_allow_html=True)
+                    
+                    st.markdown('<div class="divider-line"></div>', unsafe_allow_html=True)
                 if estacion_col and red_col and galones_col:
                     render_tabla_estaciones_red(
                         df_datos,
@@ -2900,10 +3082,23 @@ if _bdmes_ok:
                         aviso_amigable("Columna de proveedor no disponible en registro.")
 else:
     st.markdown('<div class="main-title">LOGISTIX AI | SCE</div>', unsafe_allow_html=True)
-    aviso_amigable("No se pudo cargar el Excel desde SharePoint. Verifique el enlace y su acceso.")
+    aviso_amigable("No se pudo cargar el Excel desde SharePoint.")
+    st.markdown(
+        """
+        **En Render (nube):**
+        1. **Environment** → variable `EXCEL_URL` = enlace completo de descarga del Excel.  
+        2. En SharePoint: **Compartir** → *Cualquier persona con el enlace* (sin solo usuarios de la empresa).  
+        3. **Manual Deploy** después de guardar la variable.
+        """
+    )
+    st.caption(f"Fuente configurada: **{_origen_excel_url()}**")
     if _errores_carga:
         for err in _errores_carga:
-            st.caption(err)
+            st.error(err)
+    else:
+        st.error(
+            "Sin detalle del error. Suba el último código a GitHub y haga Deploy en Render."
+        )
     if st.button("Reintentar conexión (limpiar caché)"):
         st.cache_data.clear()
         st.rerun()
