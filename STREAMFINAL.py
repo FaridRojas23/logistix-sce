@@ -1,7 +1,9 @@
+import base64
 import html
 import io
 import os
 import re
+from pathlib import Path
 import unicodedata
 import requests
 import streamlit as st
@@ -786,25 +788,31 @@ st.markdown("""
     .vehiculo-holo-stage {
         position: relative;
         width: 100%;
-        min-height: 520px;
+        height: 100%;
+        min-height: 460px;
         border-radius: 18px;
         overflow: hidden;
         background:
-            radial-gradient(ellipse 80% 60% at 50% 45%, rgba(255,215,0,0.18) 0%, transparent 55%),
-            radial-gradient(ellipse 100% 80% at 50% 100%, rgba(37,99,235,0.12) 0%, transparent 50%),
+            radial-gradient(ellipse 85% 70% at 50% 42%, rgba(255,215,0,0.2) 0%, transparent 58%),
+            radial-gradient(ellipse 90% 50% at 50% 88%, rgba(37,99,235,0.1) 0%, transparent 45%),
             linear-gradient(180deg, #0d0d0d 0%, #050505 100%);
         border: 1px solid rgba(255, 215, 0, 0.4);
         box-shadow: 0 0 40px rgba(255, 215, 0, 0.08), inset 0 0 60px rgba(255, 215, 0, 0.04);
     }
     .vehiculo-holo-stage model-viewer {
+        position: absolute;
+        inset: 0;
         width: 100%;
-        height: 520px;
+        height: 100%;
         --poster-color: transparent;
+    }
+    .vehiculo-holo-stage.es-tracto model-viewer {
+        filter: saturate(1.45) sepia(0.28) hue-rotate(-6deg) brightness(1.1);
     }
     .holo-ring {
         position: absolute;
         left: 50%;
-        top: 52%;
+        top: 48%;
         width: 280px;
         height: 280px;
         margin: -140px 0 0 -140px;
@@ -827,17 +835,28 @@ st.markdown("""
     }
     .sce-logo-3d {
         position: absolute;
-        left: 50%;
-        top: 58%;
-        transform: translate(-50%, -50%) rotateY(-18deg);
-        z-index: 5;
-        font-size: 42px;
-        font-weight: 900;
-        letter-spacing: 6px;
-        color: #ffd700;
-        text-shadow: 0 0 20px rgba(255,215,0,0.9), 0 2px 8px rgba(0,0,0,0.9);
+        left: 56%;
+        top: 44%;
+        transform: translate(-50%, -50%) perspective(420px) rotateY(-22deg) rotateX(2deg);
+        z-index: 8;
         pointer-events: none;
         font-family: "Segoe UI", Arial, sans-serif;
+        padding: 6px 14px 7px;
+        border-radius: 4px;
+        border: 2px solid rgba(255, 215, 0, 0.85);
+        background: linear-gradient(145deg, rgba(20,20,20,0.75), rgba(0,0,0,0.55));
+        font-size: 28px;
+        font-weight: 900;
+        letter-spacing: 5px;
+        color: #ffd700;
+        text-shadow: 0 0 16px rgba(255,215,0,0.85), 0 2px 6px rgba(0,0,0,0.95);
+        box-shadow: 0 0 18px rgba(255,215,0,0.35);
+    }
+    .vehiculo-holo-stage.es-camion .sce-logo-3d {
+        left: 52%;
+        top: 46%;
+        font-size: 24px;
+        letter-spacing: 4px;
     }
     .holo-veh-titulo {
         position: absolute;
@@ -864,13 +883,16 @@ st.markdown("""
     }
     .holo-veh-hint {
         position: absolute;
-        bottom: 10px;
-        left: 0;
-        right: 0;
-        text-align: center;
-        color: #888;
-        font-size: 11px;
+        top: 56px;
+        right: 12px;
+        left: auto;
+        width: auto;
+        max-width: 42%;
+        text-align: right;
+        color: rgba(180, 180, 180, 0.75);
+        font-size: 10px;
         z-index: 6;
+        line-height: 1.35;
     }
     .vehiculo-specs-panel {
         max-height: 520px;
@@ -2221,15 +2243,28 @@ def _resolver_hoja_fragmento(xl, fragmento):
     return None
 
 
+_DASH_DIR = Path(__file__).resolve().parent
+_PATH_TRACTO_GLB = _DASH_DIR / "assets" / "tracto-semi.glb"
 URL_MODELO_CAMION_3D = (
-    "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/"
-    "2.0/CesiumMilkTruck/glTF-Binary/CesiumMilkTruck.glb"
+    "https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/"
+    "Models/CesiumMilkTruck/glTF-Binary/CesiumMilkTruck.glb"
 )
-URL_MODELO_TRACTO_3D = URL_MODELO_CAMION_3D
+URL_MODELO_TRACTO_3D_CDN = (
+    "https://static.poly.pizza/73505a44-c468-4ba1-8210-07175610e32e.glb"
+)
 URL_MODELO_UTIL_3D = (
-    "https://raw.githubusercontent.com/mrdoob/three.js/r128/examples/models/gltf/ferrari.glb"
+    "https://cdn.jsdelivr.net/gh/mrdoob/three.js@r128/examples/models/gltf/ferrari.glb"
 )
 HDR_ENV_3D = "https://modelviewer.dev/shared-assets/environments/spruit_sunrise_1k_HDR.hdr"
+
+
+@st.cache_data(show_spinner=False, ttl=86400)
+def _url_modelo_tracto_glb():
+    """Semirremolque low-poly (CC0 Poly Pizza); local si existe assets/tracto-semi.glb."""
+    if _PATH_TRACTO_GLB.is_file():
+        encoded = base64.b64encode(_PATH_TRACTO_GLB.read_bytes()).decode("ascii")
+        return f"data:model/gltf-binary;base64,{encoded}"
+    return URL_MODELO_TRACTO_3D_CDN
 
 
 def _config_modelo_3d(tipo_flota, marca, modelo):
@@ -2239,9 +2274,13 @@ def _config_modelo_3d(tipo_flota, marca, modelo):
     mod = str(modelo or "").strip()
     etiqueta = f"{marca} {mod}".strip() if marca not in ("—", "") else mod or "Flota SCE"
     url = URL_MODELO_CAMION_3D
-    orbit = "42deg 88% 102%"
+    orbit = "42deg 88% 98%"
     scale = "1.05 1.05 1.05"
     categoria = "Camión de carga"
+    es_tracto = False
+    es_camion = True
+    fov = "32deg"
+    cam_target = "auto 0.45m auto"
 
     marcas_tracto = (
         "IVECO", "VOLVO", "SCANIA", "FREIGHT", "INTERNATIONAL", "KENWORTH",
@@ -2253,32 +2292,58 @@ def _config_modelo_3d(tipo_flota, marca, modelo):
     )
 
     if any(k in t for k in ("TRACT", "REMOL", "CISTER", "SEMIR")):
-        url = URL_MODELO_TRACTO_3D
-        orbit = "28deg 72% 125%"
-        scale = "1.22 1.22 1.22"
-        categoria = "Tracto"
+        url = _url_modelo_tracto_glb()
+        orbit = "18deg 62% 88%"
+        scale = "1.35 1.35 1.35"
+        categoria = "Tracto semirremolque"
+        es_tracto = True
+        es_camion = False
+        fov = "24deg"
+        cam_target = "auto 0.35m auto"
     elif any(k in t for k in ("PICK", "FURG", "VAN", "UTILIT", "AUTO")):
         url = URL_MODELO_UTIL_3D
         orbit = "38deg 92% 96%"
         scale = "0.85 0.85 0.85"
         categoria = "Utilitario"
+        es_camion = False
     elif "VOLQU" in t or "TIPPER" in t:
-        orbit = "36deg 82% 112%"
+        orbit = "36deg 82% 108%"
         scale = "1.2 1.2 1.2"
         categoria = "Volquete"
 
     if any(mk in m for mk in marcas_tracto):
-        url = URL_MODELO_TRACTO_3D
-        orbit = "26deg 70% 128%"
-        scale = "1.25 1.25 1.25"
-        categoria = f"Tracto · {marca}"
+        url = _url_modelo_tracto_glb()
+        orbit = "16deg 58% 92%"
+        scale = "1.38 1.38 1.38"
+        es_tracto = True
+        es_camion = False
+        fov = "23deg"
+        cam_target = "auto 0.32m auto"
+        if "IVECO" in m and "STRALIS" in _texto_sin_acentos(mod):
+            categoria = "Tracto Iveco Stralis"
+        elif "IVECO" in m:
+            categoria = f"Tracto Iveco · {marca}"
+        else:
+            categoria = f"Tracto · {marca}"
     elif any(mk in m for mk in marcas_camion) or "DONGFENG" in m:
         url = URL_MODELO_CAMION_3D
-        orbit = "38deg 84% 112%"
+        orbit = "38deg 84% 108%"
         scale = "1.14 1.14 1.14"
         categoria = f"Camión · {marca}" if marca not in ("—", "") else "Camión de carga"
+        es_tracto = False
+        es_camion = True
 
-    return url, orbit, scale, html.escape(etiqueta), html.escape(categoria)
+    return (
+        url,
+        orbit,
+        scale,
+        html.escape(etiqueta),
+        html.escape(categoria),
+        es_tracto,
+        es_camion,
+        fov,
+        html.escape(cam_target),
+    )
 
 
 def _preparar_vehiculos(df):
@@ -2319,37 +2384,82 @@ def buscar_ficha_vehiculo(placa, df_veh, df_bdmes):
 
 def render_holograma_vehiculo(tipo_flota, marca, modelo):
     """Visor 3D estilo holograma (model-viewer + iluminación HDR)."""
-    url, orbit, scale, titulo, categoria = _config_modelo_3d(tipo_flota, marca, modelo)
+    (
+        url,
+        orbit,
+        scale,
+        titulo,
+        categoria,
+        es_tracto,
+        es_camion,
+        fov,
+        cam_target,
+    ) = _config_modelo_3d(tipo_flota, marca, modelo)
+    clase_stage = "vehiculo-holo-stage"
+    if es_tracto:
+        clase_stage += " es-tracto"
+    elif es_camion:
+        clase_stage += " es-camion"
+    logo_html = (
+        '<div class="sce-logo-3d" title="Socorro Cargo Express">SCE</div>'
+        if es_tracto or es_camion
+        else ""
+    )
     components.html(
         f"""
+        <style>
+            html, body {{
+                margin: 0;
+                padding: 0;
+                height: 100%;
+                overflow: hidden;
+                background: #050505;
+            }}
+        </style>
         <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
-        <div class="vehiculo-holo-stage">
+        <div class="{clase_stage}">
             <div class="holo-veh-titulo">{titulo}</div>
             <div class="holo-veh-sub">{categoria} · Socorro Cargo Express</div>
             <div class="holo-ring"></div>
             <div class="holo-ring holo-ring-2"></div>
-            <model-viewer src="{url}"
+            <model-viewer id="sce-mv" src="{url}"
                 alt="{titulo}"
+                bounds="tight"
                 scale="{scale}"
+                field-of-view="{fov}"
+                camera-target="{cam_target}"
                 camera-orbit="{orbit}"
-                min-camera-orbit="auto auto 60%"
-                max-camera-orbit="auto auto 140%"
+                min-camera-orbit="auto 45% 55%"
+                max-camera-orbit="auto 95% 130%"
                 environment-image="{html.escape(HDR_ENV_3D)}"
-                exposure="1.25"
-                shadow-intensity="1.35"
-                shadow-softness="0.8"
+                exposure="1.35"
+                shadow-intensity="1.4"
+                shadow-softness="0.75"
                 auto-rotate
-                rotation-per-second="22deg"
+                rotation-per-second="20deg"
                 camera-controls
                 touch-action="pan-y"
                 interaction-prompt="none"
                 style="background:transparent;">
             </model-viewer>
-            <div class="sce-logo-3d">SCE</div>
-            <div class="holo-veh-hint">Arrastre para girar · scroll para zoom · referencia 3D según tipo y marca</div>
+            {logo_html}
+            <div class="holo-veh-hint">Girar · zoom · modelo 3D según tipo de flota</div>
         </div>
+        <script>
+            customElements.whenDefined('model-viewer').then(() => {{
+                const mv = document.getElementById('sce-mv');
+                if (!mv) return;
+                const ajustar = () => {{
+                    try {{
+                        mv.updateFraming && mv.updateFraming();
+                    }} catch (e) {{}}
+                }};
+                mv.addEventListener('load', ajustar);
+                setTimeout(ajustar, 400);
+            }});
+        </script>
         """,
-        height=540,
+        height=468,
         scrolling=False,
     )
 
