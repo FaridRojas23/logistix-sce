@@ -785,11 +785,20 @@ st.markdown("""
         background-color: #FFD700 !important;
         color: #111111 !important;
     }
+    .ficha-visor-3d-wrap {
+        width: 100%;
+        margin: 8px 0 20px 0;
+    }
+    .ficha-visor-3d-wrap iframe {
+        width: 100% !important;
+        min-height: 720px;
+        border: none;
+    }
     .vehiculo-holo-stage {
         position: relative;
         width: 100%;
-        height: 100%;
-        min-height: 460px;
+        height: 720px;
+        min-height: 720px;
         border-radius: 18px;
         overflow: hidden;
         background:
@@ -806,25 +815,47 @@ st.markdown("""
         height: 100%;
         --poster-color: transparent;
     }
-    .vehiculo-holo-stage.es-tracto model-viewer {
+    .vehiculo-holo-stage.es-tracto model-viewer#sce-mv-main,
+    .vehiculo-holo-stage.es-tracto model-viewer.sce-mv-principal {
         filter: saturate(1.45) sepia(0.28) hue-rotate(-6deg) brightness(1.1);
+    }
+    .vehiculo-holo-stage.es-camioneta model-viewer {
+        filter: saturate(1.15) contrast(1.08) brightness(1.06);
+    }
+    .vehiculo-holo-stage model-viewer.sce-mv-layer {
+        position: absolute;
+        pointer-events: none;
+        background: transparent;
+        --poster-color: transparent;
+    }
+    .vehiculo-holo-stage .mv-tanque-1 { bottom: 19%; left: 36%; width: 13%; height: 15%; z-index: 4; }
+    .vehiculo-holo-stage .mv-tanque-2 { bottom: 19%; left: 51%; width: 13%; height: 15%; z-index: 4; }
+    .vehiculo-holo-stage .mv-llanta-1 { bottom: 4%; left: 22%; width: 11%; height: 11%; z-index: 3; }
+    .vehiculo-holo-stage .mv-llanta-2 { bottom: 4%; left: 33%; width: 11%; height: 11%; z-index: 3; }
+    .vehiculo-holo-stage .mv-llanta-3 { bottom: 4%; left: 58%; width: 11%; height: 11%; z-index: 3; }
+    .vehiculo-holo-stage .mv-llanta-4 { bottom: 4%; left: 69%; width: 11%; height: 11%; z-index: 3; }
+    .vehiculo-holo-stage.es-camioneta .sce-logo-3d {
+        left: 54%;
+        top: 42%;
+        font-size: 22px;
+        letter-spacing: 4px;
     }
     .holo-ring {
         position: absolute;
         left: 50%;
-        top: 48%;
-        width: 280px;
-        height: 280px;
-        margin: -140px 0 0 -140px;
+        top: 46%;
+        width: 380px;
+        height: 380px;
+        margin: -190px 0 0 -190px;
         border-radius: 50%;
         border: 1px solid rgba(255, 215, 0, 0.25);
         pointer-events: none;
         animation: holo-spin 12s linear infinite;
     }
     .holo-ring-2 {
-        width: 340px;
-        height: 340px;
-        margin: -170px 0 0 -170px;
+        width: 460px;
+        height: 460px;
+        margin: -230px 0 0 -230px;
         border-color: rgba(37, 99, 235, 0.2);
         animation-duration: 18s;
         animation-direction: reverse;
@@ -895,7 +926,7 @@ st.markdown("""
         line-height: 1.35;
     }
     .vehiculo-specs-panel {
-        max-height: 520px;
+        max-height: 720px;
         overflow-y: auto;
         padding-right: 4px;
     }
@@ -2244,7 +2275,12 @@ def _resolver_hoja_fragmento(xl, fragmento):
 
 
 _DASH_DIR = Path(__file__).resolve().parent
-_PATH_TRACTO_GLB = _DASH_DIR / "assets" / "tracto-semi.glb"
+_ASSETS = _DASH_DIR / "assets"
+_PATH_TRACTO_GLB = _ASSETS / "tracto-semi.glb"
+_PATH_TANQUE_GLB = _ASSETS / "tanque-combustible.glb"
+_PATH_LLANTA_GLB = _ASSETS / "llanta.glb"
+_PATH_CAMIONETA_GLB = _ASSETS / "camioneta-pickup.glb"
+_PATH_CAMIONETA_L200 = _ASSETS / "camioneta-l200.glb"
 URL_MODELO_CAMION_3D = (
     "https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/"
     "Models/CesiumMilkTruck/glTF-Binary/CesiumMilkTruck.glb"
@@ -2252,19 +2288,54 @@ URL_MODELO_CAMION_3D = (
 URL_MODELO_TRACTO_3D_CDN = (
     "https://static.poly.pizza/73505a44-c468-4ba1-8210-07175610e32e.glb"
 )
+URL_MODELO_TANQUE_CDN = (
+    "https://static.poly.pizza/70483e1c-8adf-4abf-85e1-51fcfc5adf84.glb"
+)
+URL_MODELO_LLANTA_CDN = (
+    "https://static.poly.pizza/a606b1c8-dd05-417a-bd76-67c80bb56124.glb"
+)
+URL_MODELO_CAMIONETA_CDN = (
+    "https://static.poly.pizza/cc992b7f-3e7f-474e-8e45-f80b72010669.glb"
+)
+URL_MODELO_CAMIONETA_L200_CDN = (
+    "https://static.poly.pizza/ecae441a-cba8-4dd6-9795-207a72d7e88e.glb"
+)
 URL_MODELO_UTIL_3D = (
     "https://cdn.jsdelivr.net/gh/mrdoob/three.js@r128/examples/models/gltf/ferrari.glb"
 )
 HDR_ENV_3D = "https://modelviewer.dev/shared-assets/environments/spruit_sunrise_1k_HDR.hdr"
+ALTO_VISOR_3D_FICHA = 720
+
+
+@st.cache_data(show_spinner=False, ttl=86400)
+def _url_glb_asset(ruta_local, url_cdn):
+    """Carga GLB local en data-URI o CDN como respaldo."""
+    if ruta_local.is_file():
+        encoded = base64.b64encode(ruta_local.read_bytes()).decode("ascii")
+        return f"data:model/gltf-binary;base64,{encoded}"
+    return url_cdn
 
 
 @st.cache_data(show_spinner=False, ttl=86400)
 def _url_modelo_tracto_glb():
-    """Semirremolque low-poly (CC0 Poly Pizza); local si existe assets/tracto-semi.glb."""
-    if _PATH_TRACTO_GLB.is_file():
-        encoded = base64.b64encode(_PATH_TRACTO_GLB.read_bytes()).decode("ascii")
-        return f"data:model/gltf-binary;base64,{encoded}"
-    return URL_MODELO_TRACTO_3D_CDN
+    return _url_glb_asset(_PATH_TRACTO_GLB, URL_MODELO_TRACTO_3D_CDN)
+
+
+@st.cache_data(show_spinner=False, ttl=86400)
+def _url_modelo_tanque_glb():
+    return _url_glb_asset(_PATH_TANQUE_GLB, URL_MODELO_TANQUE_CDN)
+
+
+@st.cache_data(show_spinner=False, ttl=86400)
+def _url_modelo_llanta_glb():
+    return _url_glb_asset(_PATH_LLANTA_GLB, URL_MODELO_LLANTA_CDN)
+
+
+@st.cache_data(show_spinner=False, ttl=86400)
+def _url_modelo_camioneta_glb(preferir_l200=False):
+    if preferir_l200:
+        return _url_glb_asset(_PATH_CAMIONETA_L200, URL_MODELO_CAMIONETA_L200_CDN)
+    return _url_glb_asset(_PATH_CAMIONETA_GLB, URL_MODELO_CAMIONETA_CDN)
 
 
 def _config_modelo_3d(tipo_flota, marca, modelo):
@@ -2272,6 +2343,7 @@ def _config_modelo_3d(tipo_flota, marca, modelo):
     t = _texto_sin_acentos(str(tipo_flota or ""))
     m = _texto_sin_acentos(str(marca or ""))
     mod = str(modelo or "").strip()
+    mod_n = _texto_sin_acentos(mod)
     etiqueta = f"{marca} {mod}".strip() if marca not in ("—", "") else mod or "Flota SCE"
     url = URL_MODELO_CAMION_3D
     orbit = "42deg 88% 98%"
@@ -2279,8 +2351,55 @@ def _config_modelo_3d(tipo_flota, marca, modelo):
     categoria = "Camión de carga"
     es_tracto = False
     es_camion = True
+    es_camioneta = False
+    tracto_extras = False
     fov = "32deg"
     cam_target = "auto 0.45m auto"
+
+    marcas_camioneta = (
+        "MAZDA", "TOYOTA", "MITSUBISHI", "FORD", "NISSAN", "CHEVROLET",
+        "GREAT WALL", "JMC", "RAM", "GMC", "ISUZU",
+    )
+
+    if any(
+        k in t
+        for k in (
+            "CAMIONETA",
+            "PICK UP",
+            "PICKUP",
+            "DOBLE CAB",
+            "CABINA DOBLE",
+            "DOUBLE CAB",
+        )
+    ) or any(x in mod_n for x in ("BT-50", "BT50", "HILUX", "L200", "RANGER", "D-MAX", "DMAX")):
+        prefer_l200 = (
+            any(x in m for x in ("MAZDA", "MITSUBISHI", "TOYOTA", "FORD", "NISSAN"))
+            or any(x in mod_n for x in ("BT-50", "BT50", "L200", "RANGER"))
+        )
+        url = _url_modelo_camioneta_glb(preferir_l200=prefer_l200)
+        orbit = "22deg 58% 78%"
+        scale = "1.55 1.55 1.55"
+        categoria = "Camioneta doble cabina"
+        es_camioneta = True
+        es_camion = False
+        es_tracto = False
+        fov = "22deg"
+        cam_target = "auto 0.32m auto"
+        if marca not in ("—", ""):
+            categoria = f"Camioneta · {marca}"
+
+    if any(mk in m for mk in marcas_camioneta) and not es_tracto and not es_camioneta:
+        if any(x in t for x in ("PICK", "CAMIONETA", "DOBLE")) or "BT" in mod_n:
+            url = _url_modelo_camioneta_glb(
+                preferir_l200=any(x in m for x in ("MAZDA", "MITSUBISHI", "TOYOTA"))
+            )
+            orbit = "22deg 58% 78%"
+            scale = "1.55 1.55 1.55"
+            categoria = f"Camioneta · {marca}"
+            es_camioneta = True
+            es_camion = False
+            fov = "22deg"
+            cam_target = "auto 0.32m auto"
 
     marcas_tracto = (
         "IVECO", "VOLVO", "SCANIA", "FREIGHT", "INTERNATIONAL", "KENWORTH",
@@ -2291,16 +2410,36 @@ def _config_modelo_3d(tipo_flota, marca, modelo):
         "HYUNDAI", "FOTON", "FORLAND", "BEIBEN", "HOWO", "SINOTRUK",
     )
 
-    if any(k in t for k in ("TRACT", "REMOL", "CISTER", "SEMIR")):
+    # Iveco / Stralis / cabezal aunque el Excel diga solo "CAMION"
+    if (
+        "IVECO" in m
+        or "STRALIS" in mod_n
+        or "CABEZAL" in t
+        or "TRACTOR" in t
+    ):
         url = _url_modelo_tracto_glb()
-        orbit = "18deg 62% 88%"
-        scale = "1.35 1.35 1.35"
+        orbit = "12deg 52% 72%"
+        scale = "1.65 1.65 1.65"
+        categoria = "Tracto Iveco Stralis" if "IVECO" in m else "Tracto semirremolque"
+        es_tracto = True
+        es_camion = False
+        es_camioneta = False
+        tracto_extras = True
+        fov = "20deg"
+        cam_target = "auto 0.28m auto"
+
+    if any(k in t for k in ("TRACT", "REMOL", "CISTER", "SEMIR", "CABEZ", "THOR")):
+        url = _url_modelo_tracto_glb()
+        orbit = "12deg 50% 70%"
+        scale = "1.62 1.62 1.62"
         categoria = "Tracto semirremolque"
         es_tracto = True
         es_camion = False
-        fov = "24deg"
-        cam_target = "auto 0.35m auto"
-    elif any(k in t for k in ("PICK", "FURG", "VAN", "UTILIT", "AUTO")):
+        es_camioneta = False
+        tracto_extras = True
+        fov = "20deg"
+        cam_target = "auto 0.28m auto"
+    elif any(k in t for k in ("FURG", "VAN", "UTILIT", "AUTO", "SEDAN", "HATCH")):
         url = URL_MODELO_UTIL_3D
         orbit = "38deg 92% 96%"
         scale = "0.85 0.85 0.85"
@@ -2313,13 +2452,15 @@ def _config_modelo_3d(tipo_flota, marca, modelo):
 
     if any(mk in m for mk in marcas_tracto):
         url = _url_modelo_tracto_glb()
-        orbit = "16deg 58% 92%"
-        scale = "1.38 1.38 1.38"
+        orbit = "12deg 50% 72%"
+        scale = "1.62 1.62 1.62"
         es_tracto = True
         es_camion = False
-        fov = "23deg"
-        cam_target = "auto 0.32m auto"
-        if "IVECO" in m and "STRALIS" in _texto_sin_acentos(mod):
+        es_camioneta = False
+        tracto_extras = True
+        fov = "20deg"
+        cam_target = "auto 0.28m auto"
+        if "IVECO" in m and "STRALIS" in mod_n:
             categoria = "Tracto Iveco Stralis"
         elif "IVECO" in m:
             categoria = f"Tracto Iveco · {marca}"
@@ -2341,6 +2482,8 @@ def _config_modelo_3d(tipo_flota, marca, modelo):
         html.escape(categoria),
         es_tracto,
         es_camion,
+        es_camioneta,
+        tracto_extras,
         fov,
         html.escape(cam_target),
     )
@@ -2382,8 +2525,32 @@ def buscar_ficha_vehiculo(placa, df_veh, df_bdmes):
     return ficha
 
 
-def render_holograma_vehiculo(tipo_flota, marca, modelo):
+def _capas_tracto_detalle(url_tanque, url_llanta, orbit, scale, fov, cam_target, hdr):
+    """Tanques de combustible + llantas sobre el semirremolque."""
+    tanque_scale = "4.2 4.2 4.2"
+    llanta_scale = "9 9 9"
+    capas = []
+    for clase, src, esc in (
+        ("mv-tanque-1", url_tanque, tanque_scale),
+        ("mv-tanque-2", url_tanque, tanque_scale),
+        ("mv-llanta-1", url_llanta, llanta_scale),
+        ("mv-llanta-2", url_llanta, llanta_scale),
+        ("mv-llanta-3", url_llanta, llanta_scale),
+        ("mv-llanta-4", url_llanta, llanta_scale),
+    ):
+        capas.append(
+            f'<model-viewer class="sce-mv-layer {clase}" src="{src}" scale="{esc}" '
+            f'field-of-view="{fov}" camera-target="{cam_target}" camera-orbit="{orbit}" '
+            f'environment-image="{html.escape(hdr)}" exposure="1.45" shadow-intensity="1.2" '
+            f'auto-rotate rotation-per-second="20deg" interaction-prompt="none" '
+            f'camera-controls="false" style="background:transparent;"></model-viewer>'
+        )
+    return "\n".join(capas)
+
+
+def render_holograma_vehiculo(tipo_flota, marca, modelo, alto=None):
     """Visor 3D estilo holograma (model-viewer + iluminación HDR)."""
+    alto_px = int(alto or ALTO_VISOR_3D_FICHA)
     (
         url,
         orbit,
@@ -2392,28 +2559,79 @@ def render_holograma_vehiculo(tipo_flota, marca, modelo):
         categoria,
         es_tracto,
         es_camion,
+        es_camioneta,
+        tracto_extras,
         fov,
         cam_target,
     ) = _config_modelo_3d(tipo_flota, marca, modelo)
     clase_stage = "vehiculo-holo-stage"
     if es_tracto:
         clase_stage += " es-tracto"
+    elif es_camioneta:
+        clase_stage += " es-camioneta"
     elif es_camion:
         clase_stage += " es-camion"
     logo_html = (
         '<div class="sce-logo-3d" title="Socorro Cargo Express">SCE</div>'
-        if es_tracto or es_camion
+        if es_tracto or es_camion or es_camioneta
         else ""
     )
+    capas_html = ""
+    sync_script = ""
+    if tracto_extras:
+        url_tanque = html.escape(_url_modelo_tanque_glb())
+        url_llanta = html.escape(_url_modelo_llanta_glb())
+        capas_html = _capas_tracto_detalle(
+            url_tanque, url_llanta, orbit, scale, fov, cam_target, HDR_ENV_3D
+        )
+        sync_script = """
+            const syncCapas = () => {
+                const main = document.getElementById('sce-mv-main');
+                if (!main) return;
+                document.querySelectorAll('.sce-mv-layer').forEach((capa) => {
+                    try {
+                        capa.cameraOrbit = main.getCameraOrbit();
+                        capa.cameraTarget = main.getCameraTarget();
+                        capa.fieldOfView = main.fieldOfView;
+                    } catch (e) {}
+                });
+            };
+            const main = document.getElementById('sce-mv-main');
+            if (main) {
+                main.addEventListener('camera-change', syncCapas);
+                main.addEventListener('load', () => {
+                    syncCapas();
+                    try { main.updateFraming && main.updateFraming(); } catch (e) {}
+                });
+                setInterval(syncCapas, 80);
+            }
+        """
+
+    mv_id = "sce-mv-main" if tracto_extras else "sce-mv"
     components.html(
         f"""
         <style>
             html, body {{
                 margin: 0;
                 padding: 0;
-                height: 100%;
+                width: 100%;
+                height: {alto_px}px;
                 overflow: hidden;
                 background: #050505;
+            }}
+            .vehiculo-holo-stage {{
+                position: relative;
+                width: 100%;
+                height: {alto_px}px;
+                min-height: {alto_px}px;
+            }}
+            .vehiculo-holo-stage model-viewer#sce-mv-main,
+            .vehiculo-holo-stage model-viewer#sce-mv,
+            .vehiculo-holo-stage model-viewer.sce-mv-principal {{
+                position: absolute;
+                inset: 0;
+                width: 100%;
+                height: 100%;
             }}
         </style>
         <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
@@ -2422,19 +2640,19 @@ def render_holograma_vehiculo(tipo_flota, marca, modelo):
             <div class="holo-veh-sub">{categoria} · Socorro Cargo Express</div>
             <div class="holo-ring"></div>
             <div class="holo-ring holo-ring-2"></div>
-            <model-viewer id="sce-mv" src="{url}"
+            <model-viewer id="{mv_id}" class="sce-mv-principal" src="{url}"
                 alt="{titulo}"
                 bounds="tight"
                 scale="{scale}"
                 field-of-view="{fov}"
                 camera-target="{cam_target}"
                 camera-orbit="{orbit}"
-                min-camera-orbit="auto 45% 55%"
-                max-camera-orbit="auto 95% 130%"
+                min-camera-orbit="auto 40% 48%"
+                max-camera-orbit="auto 95% 120%"
                 environment-image="{html.escape(HDR_ENV_3D)}"
-                exposure="1.35"
-                shadow-intensity="1.4"
-                shadow-softness="0.75"
+                exposure="1.4"
+                shadow-intensity="1.45"
+                shadow-softness="0.72"
                 auto-rotate
                 rotation-per-second="20deg"
                 camera-controls
@@ -2442,24 +2660,24 @@ def render_holograma_vehiculo(tipo_flota, marca, modelo):
                 interaction-prompt="none"
                 style="background:transparent;">
             </model-viewer>
+            {capas_html}
             {logo_html}
             <div class="holo-veh-hint">Girar · zoom · modelo 3D según tipo de flota</div>
         </div>
         <script>
             customElements.whenDefined('model-viewer').then(() => {{
-                const mv = document.getElementById('sce-mv');
+                const mv = document.getElementById('{mv_id}');
                 if (!mv) return;
                 const ajustar = () => {{
-                    try {{
-                        mv.updateFraming && mv.updateFraming();
-                    }} catch (e) {{}}
+                    try {{ mv.updateFraming && mv.updateFraming(); }} catch (e) {{}}
                 }};
                 mv.addEventListener('load', ajustar);
                 setTimeout(ajustar, 400);
+                {sync_script}
             }});
         </script>
         """,
-        height=468,
+        height=alto_px + 8,
         scrolling=False,
     )
 
@@ -2501,49 +2719,41 @@ def render_vista_ficha_vehiculo(df_bdmes, df_vehiculos, mes_corto, simbolo):
     marca = _valor_ficha(ficha.get("MARCA"))
     modelo = _valor_ficha(ficha.get("MODELO"))
 
-    col_3d, col_specs = st.columns([1.75, 1])
-    with col_3d:
-        render_holograma_vehiculo(tipo, marca, modelo)
-        if df_bdmes is not None and not df_bdmes.empty and mes_corto:
-            cols = columnas_mes(mes_corto, df_bdmes.columns)
-            fila_m = df_bdmes[df_bdmes["PLACA"] == placa_sel]
-            if not fila_m.empty and cols["gal"] in df_bdmes.columns:
-                r = fila_m.iloc[0]
-                st.markdown(
-                    f'<div class="section-title" style="margin-top:12px;">Consumo — '
-                    f'{MESES_COMPLETOS.get(mes_corto, mes_corto)}</div>',
-                    unsafe_allow_html=True,
-                )
-                k1, k2, k3, k4 = st.columns(4)
-                render_kpi_beautiful(
-                    k1, "Galones", f"{format_number(r.get(cols['gal'], 0), 2):,.2f}", "GL"
-                )
-                render_kpi_beautiful(
-                    k2, "Kilómetros", f"{format_number(r.get(cols['km'], 0), 2):,.2f}", "KM"
-                )
-                render_kpi_beautiful(
-                    k3, "Rendimiento", f"{format_number(r.get(cols['ren'], 0), 2):,.2f}", "KM/G"
-                )
-                render_kpi_beautiful(
-                    k4, "Gasto", f"{simbolo} {format_number(r.get(cols['sub'], 0), 2):,.2f}"
-                )
+    st.markdown(
+        f"""
+        <style>
+            div[data-testid="stHtml"] {{ width: 100% !important; max-width: 100% !important; }}
+            div[data-testid="stHtml"] iframe {{
+                width: 100% !important;
+                min-height: {ALTO_VISOR_3D_FICHA + 8}px !important;
+                height: {ALTO_VISOR_3D_FICHA + 8}px !important;
+                border: none;
+            }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    render_holograma_vehiculo(tipo, marca, modelo, alto=ALTO_VISOR_3D_FICHA)
 
+    col_specs, col_specs2 = st.columns([1, 1])
     with col_specs:
         st.markdown('<div class="section-title">Ficha técnica</div>', unsafe_allow_html=True)
         st.markdown('<div class="vehiculo-specs-panel">', unsafe_allow_html=True)
-        s1, s2 = st.columns(2)
-        with s1:
-            render_tarjeta_spec("Placa", placa_sel)
-            render_tarjeta_spec("Tipo flota", tipo)
-            render_tarjeta_spec("Marca", marca)
-            render_tarjeta_spec("Modelo", modelo)
-            render_tarjeta_spec("Año", _valor_ficha(ficha.get("AÑO") or ficha.get("ANO")))
-        with s2:
-            render_tarjeta_spec("Conductor", _valor_ficha(ficha.get("CONDUCTOR")))
-            render_tarjeta_spec("CECO", _valor_ficha(ficha.get("CECO")))
-            render_tarjeta_spec("Tanque (GL)", _valor_ficha(ficha.get("TANQUE DE COMBUSTIBLE")))
-            render_tarjeta_spec("Combustible", _valor_ficha(ficha.get("COMBUSTIBLE")))
-            render_tarjeta_spec("Ejes", _valor_ficha(ficha.get("EJES")))
+        render_tarjeta_spec("Placa", placa_sel)
+        render_tarjeta_spec("Tipo flota", tipo)
+        render_tarjeta_spec("Marca", marca)
+        render_tarjeta_spec("Modelo", modelo)
+        render_tarjeta_spec("Año", _valor_ficha(ficha.get("AÑO") or ficha.get("ANO")))
+        render_tarjeta_spec("Conductor", _valor_ficha(ficha.get("CONDUCTOR")))
+        render_tarjeta_spec("CECO", _valor_ficha(ficha.get("CECO")))
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with col_specs2:
+        st.markdown('<div class="section-title">Especificaciones</div>', unsafe_allow_html=True)
+        st.markdown('<div class="vehiculo-specs-panel">', unsafe_allow_html=True)
+        render_tarjeta_spec("Tanque (GL)", _valor_ficha(ficha.get("TANQUE DE COMBUSTIBLE")))
+        render_tarjeta_spec("Combustible", _valor_ficha(ficha.get("COMBUSTIBLE")))
+        render_tarjeta_spec("Ejes", _valor_ficha(ficha.get("EJES")))
         render_tarjeta_spec(
             "Dimensiones L × A × Al (m)",
             f"{_valor_ficha(ficha.get('LARGO'))} × {_valor_ficha(ficha.get('ANCHO'))} × {_valor_ficha(ficha.get('ALTO'))}",
@@ -2557,6 +2767,30 @@ def render_vista_ficha_vehiculo(df_bdmes, df_vehiculos, mes_corto, simbolo):
                 break
         render_tarjeta_spec("RPM", rpm_val)
         st.markdown("</div>", unsafe_allow_html=True)
+
+    if df_bdmes is not None and not df_bdmes.empty and mes_corto:
+        cols = columnas_mes(mes_corto, df_bdmes.columns)
+        fila_m = df_bdmes[df_bdmes["PLACA"] == placa_sel]
+        if not fila_m.empty and cols["gal"] in df_bdmes.columns:
+            r = fila_m.iloc[0]
+            st.markdown(
+                f'<div class="section-title" style="margin-top:16px;">Consumo — '
+                f'{MESES_COMPLETOS.get(mes_corto, mes_corto)}</div>',
+                unsafe_allow_html=True,
+            )
+            k1, k2, k3, k4 = st.columns(4)
+            render_kpi_beautiful(
+                k1, "Galones", f"{format_number(r.get(cols['gal'], 0), 2):,.2f}", "GL"
+            )
+            render_kpi_beautiful(
+                k2, "Kilómetros", f"{format_number(r.get(cols['km'], 0), 2):,.2f}", "KM"
+            )
+            render_kpi_beautiful(
+                k3, "Rendimiento", f"{format_number(r.get(cols['ren'], 0), 2):,.2f}", "KM/G"
+            )
+            render_kpi_beautiful(
+                k4, "Gasto", f"{simbolo} {format_number(r.get(cols['sub'], 0), 2):,.2f}"
+            )
 
 
 def _preparar_bdmes(df):
